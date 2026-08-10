@@ -3,6 +3,17 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val signingStoreFilePath = System.getenv("OPPO_SIGNING_STORE_FILE")?.trim().orEmpty()
+val signingStorePassword = System.getenv("OPPO_SIGNING_STORE_PASSWORD")?.trim().orEmpty()
+val signingKeyAlias = System.getenv("OPPO_SIGNING_KEY_ALIAS")?.trim().orEmpty()
+val signingKeyPassword = System.getenv("OPPO_SIGNING_KEY_PASSWORD")?.trim().orEmpty()
+val hasStableSigning = listOf(
+    signingStoreFilePath,
+    signingStorePassword,
+    signingKeyAlias,
+    signingKeyPassword
+).all { it.isNotBlank() }
+
 android {
     namespace = "com.zhuchenyu.oppohealthbridge"
     compileSdk = 36
@@ -11,21 +22,40 @@ android {
         applicationId = "com.zhuchenyu.oppohealthbridge"
         minSdk = 28
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
     }
 
     buildFeatures {
         buildConfig = true
     }
 
+    signingConfigs {
+        if (hasStableSigning) {
+            create("oppoStable") {
+                storeFile = file(signingStoreFilePath)
+                storePassword = signingStorePassword
+                keyAlias = signingKeyAlias
+                keyPassword = signingKeyPassword
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            if (hasStableSigning) {
+                signingConfig = signingConfigs.getByName("oppoStable")
+            }
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            if (hasStableSigning) {
+                signingConfig = signingConfigs.getByName("oppoStable")
+            }
         }
     }
 
@@ -46,5 +76,5 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.10.1")
     implementation("androidx.health.connect:connect-client:1.1.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
-    implementation(files("libs/oppo-health-sdk-2.1.7.aar"))
+    implementation("com.heytap.health:sdk:2.1.7")
 }
