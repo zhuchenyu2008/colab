@@ -23,11 +23,16 @@ class SyncWorker(
             if (reader.authorizedScopes().isEmpty()) {
                 return Result.failure(workDataOf("error" to "OPPO Health not authorized"))
             }
+            if (!writer.isAvailable()) {
+                return Result.failure(workDataOf("error" to "Health Connect SDK unavailable"))
+            }
             if (!writer.hasAllPermissions()) {
                 return Result.failure(workDataOf("error" to "Health Connect not authorized"))
             }
 
-            val snapshot = reader.readSnapshot(days = 2)
+            // Three complete local calendar days covers delayed watch uploads without ever starting
+            // in the middle of an older day and overwriting that day's complete Health Connect record.
+            val snapshot = reader.readSnapshot(days = 3)
             val stats = writer.write(snapshot)
             Result.success(
                 workDataOf(
