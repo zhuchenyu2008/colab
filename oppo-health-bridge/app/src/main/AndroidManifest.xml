@@ -20,6 +20,10 @@
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
         <activity
+            android:name=".DeveloperInfoActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".PermissionsRationaleActivity"
             android:exported="true">
             <intent-filter>
