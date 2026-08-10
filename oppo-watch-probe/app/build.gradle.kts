@@ -73,5 +73,8 @@ dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("androidx.health:health-services-client:1.1.0-rc02")
-    implementation("com.google.guava:listenablefuture:1.0")
+    // Health Services' Java API exposes Guava ListenableFuture. The tiny listenablefuture-only
+    // artifact can be replaced by an empty conflict-avoidance module during dependency resolution,
+    // so include the Android Guava artifact explicitly for this diagnostic build.
+    implementation("com.google.guava:guava:33.4.8-android")
 }
