@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "com.zhuchenyu.oppohealthbridge"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.zhuchenyu.oppohealthbridge"
