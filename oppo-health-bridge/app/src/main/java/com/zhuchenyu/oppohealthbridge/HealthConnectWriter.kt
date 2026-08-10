@@ -45,14 +45,24 @@ class HealthConnectWriter(private val context: Context) {
     }
 
     private val zone = ZoneId.systemDefault()
-    private val client: HealthConnectClient by lazy { HealthConnectClient.getOrCreate(context.applicationContext) }
     private val device = Device(type = Device.TYPE_WATCH, manufacturer = "OPPO", model = "Watch 3 Pro")
+
+    fun sdkStatus(): Int = HealthConnectClient.getSdkStatus(context.applicationContext)
+
+    fun isAvailable(): Boolean = sdkStatus() == HealthConnectClient.SDK_AVAILABLE
+
+    private val client: HealthConnectClient by lazy {
+        check(isAvailable()) { "Health Connect SDK 当前不可用，状态码=${sdkStatus()}" }
+        HealthConnectClient.getOrCreate(context.applicationContext)
+    }
 
     suspend fun grantedPermissions(): Set<String> = client.permissionController.getGrantedPermissions()
 
-    suspend fun hasAllPermissions(): Boolean = grantedPermissions().containsAll(PERMISSIONS)
+    suspend fun hasAllPermissions(): Boolean = isAvailable() && grantedPermissions().containsAll(PERMISSIONS)
 
     suspend fun write(snapshot: OppoSnapshot): SyncStats {
+        check(isAvailable()) { "Health Connect SDK 当前不可用，状态码=${sdkStatus()}" }
+
         val version = snapshot.generatedAtMs
         val records = mutableListOf<Record>()
         var hrCount = 0
@@ -62,6 +72,8 @@ class HealthConnectWriter(private val context: Context) {
         var caloriesCount = 0
         var sleepCount = 0
 
+        // One stable record per local calendar day. OppoHealthReader always reads complete calendar
+        // days for previous days, so a rolling-window partial day can no longer overwrite history.
         snapshot.heartRates
             .filter { it.bpm in 1..300 && it.timeMs > 0L }
             .groupBy { Instant.ofEpochMilli(it.timeMs).atZone(zone).toLocalDate() }
@@ -73,15 +85,16 @@ class HealthConnectWriter(private val context: Context) {
                     )
                 }
                 if (samples.isNotEmpty()) {
-                    val start = samples.first().time
-                    val last = samples.last().time
-                    val end = if (last.isAfter(start)) last else start.plusMillis(1)
+                    val start = day.atStartOfDay(zone).toInstant()
+                    val dayEnd = day.plusDays(1).atStartOfDay(zone).toInstant()
+                    val now = Instant.now()
+                    val end = minOfInstant(dayEnd, now).takeIf { it.isAfter(start) } ?: start.plusMillis(1)
                     records += HeartRateRecord(
                         startTime = start,
                         startZoneOffset = start.atZone(zone).offset,
                         endTime = end,
                         endZoneOffset = end.atZone(zone).offset,
-                        samples = samples,
+                        samples = samples.filter { !it.time.isBefore(start) && it.time.isBefore(end) },
                         metadata = metadata("oppo-heart-rate-$day", version)
                     )
                     hrCount++
@@ -117,7 +130,14 @@ class HealthConnectWriter(private val context: Context) {
         val nowMs = System.currentTimeMillis()
         snapshot.dailyActivity.forEach { activity ->
             val startMs = activity.dayStartMs
-            val endMs = min(startMs + 24L * 60L * 60L * 1000L, nowMs)
+            val nextDayStartMs = Instant.ofEpochMilli(startMs)
+                .atZone(zone)
+                .toLocalDate()
+                .plusDays(1)
+                .atStartOfDay(zone)
+                .toInstant()
+                .toEpochMilli()
+            val endMs = min(nextDayStartMs, nowMs)
             if (startMs <= 0L || endMs <= startMs) return@forEach
             val start = Instant.ofEpochMilli(startMs)
             val end = Instant.ofEpochMilli(endMs)
@@ -152,6 +172,7 @@ class HealthConnectWriter(private val context: Context) {
             .forEach { sleep ->
                 val start = Instant.ofEpochMilli(sleep.startMs)
                 val end = Instant.ofEpochMilli(sleep.endMs)
+                val stages = sanitizeStages(sleep, start, end)
                 records += SleepSessionRecord(
                     startTime = start,
                     startZoneOffset = start.atZone(zone).offset,
@@ -159,7 +180,8 @@ class HealthConnectWriter(private val context: Context) {
                     endZoneOffset = end.atZone(zone).offset,
                     metadata = metadata("oppo-sleep-${sleep.startMs}-${sleep.endMs}", version),
                     title = "OPPO Watch 睡眠",
-                    notes = sleep.score?.let { "OPPO 睡眠评分：$it" }
+                    notes = sleep.score?.let { "OPPO 睡眠评分：$it" },
+                    stages = stages
                 )
                 sleepCount++
             }
@@ -178,6 +200,45 @@ class HealthConnectWriter(private val context: Context) {
             sourceWarnings = snapshot.warnings
         )
     }
+
+    private fun sanitizeStages(
+        sleep: SleepWindow,
+        sessionStart: Instant,
+        sessionEnd: Instant
+    ): List<SleepSessionRecord.Stage> {
+        val result = mutableListOf<SleepSessionRecord.Stage>()
+        var cursor = sessionStart
+
+        sleep.stages.sortedBy { it.startMs }.forEach { source ->
+            var start = Instant.ofEpochMilli(source.startMs)
+            val end = Instant.ofEpochMilli(source.endMs)
+            if (start.isBefore(sessionStart)) start = sessionStart
+            if (start.isBefore(cursor)) start = cursor
+            val clippedEnd = if (end.isAfter(sessionEnd)) sessionEnd else end
+            if (!clippedEnd.isAfter(start)) return@forEach
+
+            result += SleepSessionRecord.Stage(
+                startTime = start,
+                endTime = clippedEnd,
+                stage = mapOppoSleepStage(source.stage)
+            )
+            cursor = clippedEnd
+        }
+
+        return result
+    }
+
+    private fun mapOppoSleepStage(oppoStage: Int): Int = when (oppoStage) {
+        1 -> SleepSessionRecord.STAGE_TYPE_SLEEPING
+        2 -> SleepSessionRecord.STAGE_TYPE_DEEP
+        3 -> SleepSessionRecord.STAGE_TYPE_REM
+        4 -> SleepSessionRecord.STAGE_TYPE_LIGHT
+        5 -> SleepSessionRecord.STAGE_TYPE_AWAKE
+        6 -> SleepSessionRecord.STAGE_TYPE_OUT_OF_BED
+        else -> SleepSessionRecord.STAGE_TYPE_UNKNOWN
+    }
+
+    private fun minOfInstant(a: Instant, b: Instant): Instant = if (a.isBefore(b)) a else b
 
     private fun metadata(clientRecordId: String, version: Long): Metadata =
         Metadata.autoRecorded(
