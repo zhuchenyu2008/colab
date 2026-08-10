@@ -63,7 +63,7 @@ class MainActivity : ComponentActivity() {
         }
         content.addView(status)
 
-        content.addView(actionButton("1. 授权 OPPO 健康") {
+        content.addView(actionButton("1. 授权 OPPO 健康", {
             lifecycleScope.launch {
                 try {
                     if (!reader.isHealthInstalled()) {
@@ -80,7 +80,7 @@ class MainActivity : ComponentActivity() {
             }
         }, gap))
 
-        content.addView(actionButton("2. 授权 Health Connect 写入") {
+        content.addView(actionButton("2. 授权 Health Connect 写入", {
             try {
                 healthPermissionLauncher.launch(HealthConnectWriter.PERMISSIONS)
             } catch (t: Throwable) {
@@ -88,11 +88,11 @@ class MainActivity : ComponentActivity() {
             }
         }, gap))
 
-        content.addView(actionButton("3. 立即同步最近 7 天") {
+        content.addView(actionButton("3. 立即同步最近 7 天", {
             syncNow()
         }, gap))
 
-        content.addView(actionButton("开启 15 分钟后台同步") {
+        content.addView(actionButton("开启 15 分钟后台同步", {
             lifecycleScope.launch {
                 try {
                     val scopes = reader.authorizedScopes()
@@ -112,12 +112,12 @@ class MainActivity : ComponentActivity() {
             }
         }, gap))
 
-        content.addView(actionButton("关闭后台同步") {
+        content.addView(actionButton("关闭后台同步", {
             SyncWorker.cancel(applicationContext)
             setStatus("后台同步已关闭。")
         }, gap))
 
-        content.addView(actionButton("刷新状态") {
+        content.addView(actionButton("刷新状态", {
             refreshState()
         }, gap))
 
