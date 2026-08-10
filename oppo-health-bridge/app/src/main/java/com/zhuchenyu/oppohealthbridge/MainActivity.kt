@@ -11,6 +11,8 @@ import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.lifecycleScope
+import com.heytap.databaseengine.HeytapHealthApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -20,6 +22,10 @@ class MainActivity : ComponentActivity() {
     private lateinit var reader: OppoHealthReader
     private lateinit var writer: HealthConnectWriter
     private lateinit var status: TextView
+
+    private var oppoAuthPending = false
+    private var oppoAuthLeftApp = false
+    private var lastOppoActivityResult: String? = null
 
     private val healthPermissionLauncher = registerForActivityResult(
         PermissionController.createRequestPermissionResultContract()
@@ -34,6 +40,31 @@ class MainActivity : ComponentActivity() {
         writer = HealthConnectWriter(applicationContext)
         setContentView(buildUi())
         refreshState()
+    }
+
+    override fun onPause() {
+        if (oppoAuthPending) {
+            oppoAuthLeftApp = true
+        }
+        super.onPause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (oppoAuthPending && oppoAuthLeftApp) {
+            oppoAuthPending = false
+            oppoAuthLeftApp = false
+            lifecycleScope.launch {
+                delay(350)
+                validateOppoAuthorizationAfterReturn()
+            }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        lastOppoActivityResult = "requestCode=$requestCode, resultCode=$resultCode"
+        super.onActivityResult(requestCode, resultCode, data)
     }
 
     private fun buildUi(): View {
@@ -53,7 +84,7 @@ class MainActivity : ComponentActivity() {
         })
 
         content.addView(TextView(this).apply {
-            text = "把国行 OPPO 健康中已同步的心率、静息心率、血氧、步数、消耗与睡眠写入系统 Health Connect。数据默认不上传服务器。"
+            text = "v0.3.0 授权链路改为 OPPO 官方 healthsdk_demo 的 Activity 授权方式：request(Activity) → 返回 App → valid() 校验。"
             textSize = 15f
             setPadding(0, 0, 0, gap)
         })
@@ -64,20 +95,29 @@ class MainActivity : ComponentActivity() {
         }
         content.addView(status)
 
-        content.addView(actionButton("1. 授权 OPPO 健康", {
-            lifecycleScope.launch {
-                try {
-                    if (!reader.isHealthInstalled()) {
-                        setStatus("未检测到国行 OPPO 健康（com.heytap.health）。")
-                        return@launch
-                    }
-                    setStatus("正在打开 OPPO 健康授权页……")
-                    reader.requestAuthorization(this@MainActivity)
-                    val scopes = reader.authorizedScopes()
-                    setStatus("OPPO 健康授权完成。当前 scope：\n${scopes.joinToString("\n").ifBlank { "（没有返回 scope）" }}")
-                } catch (t: Throwable) {
-                    setStatus("OPPO 健康授权失败：${friendlyError(t)}")
+        content.addView(actionButton("1. 授权 OPPO 健康（官方 Demo 模式）", {
+            try {
+                if (!reader.isHealthInstalled()) {
+                    setStatus("未检测到国行 OPPO 健康（com.heytap.health）。")
+                    return@actionButton
                 }
+
+                reader.initialize()
+                oppoAuthPending = true
+                oppoAuthLeftApp = false
+                lastOppoActivityResult = null
+                setStatus(
+                    "正在按 OPPO 官方 Demo 调用 authorityApi().request(Activity)…\n" +
+                        "如果授权页被成功拉起，返回本 App 后会自动调用 valid() 校验 scope。"
+                )
+
+                // Strictly mirror OPPO-OpenPlatform/healthsdk_demo:
+                // authorityApi().request(Activity) with no AuthResult callback.
+                HeytapHealthApi.getInstance().authorityApi().request(this@MainActivity)
+            } catch (t: Throwable) {
+                oppoAuthPending = false
+                oppoAuthLeftApp = false
+                setStatus("OPPO 官方模式授权调用失败：${friendlyError(t)}")
             }
         }, gap))
 
@@ -127,13 +167,30 @@ class MainActivity : ComponentActivity() {
         }, gap))
 
         content.addView(TextView(this).apply {
-            text = "已知真机结果：错误码 100006 表示 OPPO 健康拒绝当前应用权限。若授权页黑屏/立即退出且数据共享与授权中没有本 App，优先核对包名、当前 APK 签名、预申请 scope、Host 和白名单。"
+            text = "本版用于排除授权调用方式差异。如果仍然在返回后得到 100006，则能更有把握地判断问题位于 OPPO 侧的应用身份/预申请 scope，而不是 callback 授权写法。"
             textSize = 13f
             setPadding(0, gap, 0, 0)
         })
 
         return ScrollView(this).apply {
             addView(content, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+    }
+
+    private suspend fun validateOppoAuthorizationAfterReturn() {
+        val activityResultText = lastOppoActivityResult?.let { "\nActivityResult：$it" } ?: "\nActivityResult：未收到（仅通过 onResume 检测到已返回）"
+        try {
+            val scopes = reader.authorizedScopes()
+            val scopeText = scopes.joinToString("\n").ifBlank { "（没有返回 scope）" }
+            setStatus(
+                "已从 OPPO 健康返回。$activityResultText\n" +
+                    "valid() 成功，当前 scope：\n$scopeText"
+            )
+        } catch (t: Throwable) {
+            setStatus(
+                "已从 OPPO 健康返回。$activityResultText\n" +
+                    "随后 valid() 失败：${friendlyError(t)}"
+            )
         }
     }
 
@@ -156,6 +213,7 @@ class MainActivity : ComponentActivity() {
             try {
                 val scopes = reader.authorizedScopes()
                 lines += "OPPO 健康授权：${if (scopes.isNotEmpty()) "已授权（${scopes.size} 个 scope）" else "未授权"}"
+                if (scopes.isNotEmpty()) lines += "scope：${scopes.joinToString(", ")}"
             } catch (t: Throwable) {
                 lines += "OPPO 健康授权状态：${friendlyError(t)}"
             }
@@ -168,6 +226,8 @@ class MainActivity : ComponentActivity() {
                 lines += "Health Connect：${t.message ?: t.javaClass.simpleName}"
             }
 
+            lines += "OPPO 授权方式：官方 Demo request(Activity)"
+            lines += "SDK：OPPO Health SDK 2.1.7"
             lines += "版本：${BuildConfig.VERSION_NAME}"
             setStatus(lines.joinToString("\n"))
         }
@@ -216,7 +276,7 @@ class MainActivity : ComponentActivity() {
         return if (t is OppoSdkException) {
             val hint = when (t.errorCode) {
                 100004 -> "OPPO 健康账号未登录"
-                100006 -> "OPPO 健康拒绝权限：重点检查包名、APK签名、预申请scope/白名单"
+                100006 -> "OPPO 健康拒绝权限"
                 100007 -> "未安装 OPPO 健康"
                 100008 -> "OPPO 健康版本过低"
                 100012 -> "OPPO 健康授权失败"
