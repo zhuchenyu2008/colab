@@ -86,14 +86,14 @@ jobs:
       - name: Rename APK
         run: |
           cp oppo-health-bridge/app/build/outputs/apk/debug/app-debug.apk \
-            oppo-health-bridge/app/build/outputs/apk/debug/OPPO-Health-Bridge-v0.3.0.apk
+            oppo-health-bridge/app/build/outputs/apk/debug/OPPO-Health-Bridge-v0.3.1.apk
 
       - name: Upload APK and fingerprint
         uses: actions/upload-artifact@v4
         with:
-          name: OPPO-Health-Bridge-v0.3.0
+          name: OPPO-Health-Bridge-v0.3.1
           path: |
-            oppo-health-bridge/app/build/outputs/apk/debug/OPPO-Health-Bridge-v0.3.0.apk
+            oppo-health-bridge/app/build/outputs/apk/debug/OPPO-Health-Bridge-v0.3.1.apk
             signing-fingerprint.txt
           if-no-files-found: error
           retention-days: 30
