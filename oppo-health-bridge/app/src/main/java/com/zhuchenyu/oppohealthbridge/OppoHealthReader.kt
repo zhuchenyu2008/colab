@@ -11,12 +11,15 @@ import com.heytap.databaseengine.apiv3.data.DataPoint
 import com.heytap.databaseengine.apiv3.data.DataSet
 import com.heytap.databaseengine.apiv3.data.DataType
 import com.heytap.databaseengine.apiv3.data.Element
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlin.math.min
 
 class OppoSdkException(val errorCode: Int, message: String = "OPPO 健康 SDK 错误：$errorCode") : Exception(message)
 
@@ -28,10 +31,16 @@ data class DailyActivityPoint(
     val caloriesKcal: Double,
     val distanceMeters: Long
 )
+data class SleepStageWindow(
+    val startMs: Long,
+    val endMs: Long,
+    val stage: Int
+)
 data class SleepWindow(
     val startMs: Long,
     val endMs: Long,
-    val score: Int?
+    val score: Int?,
+    val stages: List<SleepStageWindow> = emptyList()
 )
 data class OppoSnapshot(
     val generatedAtMs: Long,
@@ -47,6 +56,10 @@ class OppoHealthReader(private val context: Context) {
     companion object {
         const val HEALTH_PACKAGE = "com.heytap.health"
         private const val SUCCESS = 100000
+        private const val AUTH_FAILURE = 100012
+        private const val AUTH_TIMEOUT_MS = 20_000L
+        private const val AUTH_VALID_DELAY_MS = 800L
+        private const val MAX_QUERY_RANGE_MS = 29L * 24L * 60L * 60L * 1000L
     }
 
     private var initialized = false
@@ -63,6 +76,34 @@ class OppoHealthReader(private val context: Context) {
 
     suspend fun requestAuthorization(activity: Activity) {
         initialize()
+        var callbackFailure: Throwable? = null
+
+        val callbackCompleted = withTimeoutOrNull(AUTH_TIMEOUT_MS) {
+            try {
+                requestAuthorizationOnce(activity)
+                true
+            } catch (t: Throwable) {
+                callbackFailure = t
+                false
+            }
+        }
+
+        // Some OPPO Health/ColorOS versions return to our Activity before the SDK callback is reliable.
+        // Treat authorityApi().valid() as the final source of truth after a short settle delay.
+        delay(AUTH_VALID_DELAY_MS)
+        val validResult = runCatching { authorizedScopes() }
+        val scopes = validResult.getOrNull().orEmpty()
+        if (scopes.isNotEmpty()) return
+
+        callbackFailure?.let { throw it }
+        validResult.exceptionOrNull()?.let { throw it }
+        if (callbackCompleted == null) {
+            throw OppoSdkException(AUTH_FAILURE, "OPPO 健康授权超时，且未返回有效 scope")
+        }
+        throw OppoSdkException(AUTH_FAILURE, "OPPO 健康未返回任何已授权 scope")
+    }
+
+    private suspend fun requestAuthorizationOnce(activity: Activity) {
         suspendCancellableCoroutine<Unit> { continuation ->
             HeytapHealthApi.getInstance().authorityApi().request(activity, object : HResponse<AuthResult> {
                 override fun onSuccess(result: AuthResult) {
@@ -96,16 +137,30 @@ class OppoHealthReader(private val context: Context) {
         }
     }
 
+    /**
+     * Reads complete local calendar days rather than a rolling N*24h window.
+     * This prevents a partial first day from overwriting a previously complete Health Connect record.
+     */
     suspend fun readSnapshot(days: Int = 7): OppoSnapshot {
-        initialize()
         val safeDays = days.coerceIn(1, 29)
         val end = System.currentTimeMillis()
-        val start = end - safeDays * 24L * 60L * 60L * 1000L
+        val today = Instant.ofEpochMilli(end).atZone(zone).toLocalDate()
+        val start = today.minusDays((safeDays - 1).toLong())
+            .atStartOfDay(zone)
+            .toInstant()
+            .toEpochMilli()
+        return readSnapshot(start, end)
+    }
+
+    suspend fun readSnapshot(startMs: Long, endMs: Long): OppoSnapshot {
+        initialize()
+        require(startMs in 1..endMs) { "Invalid OPPO Health time range" }
+
         val warnings = mutableListOf<String>()
 
-        suspend fun readOrEmpty(type: DataType, label: String): List<DataPoint> {
+        suspend fun readOrEmpty(type: DataType, label: String, start: Long = startMs, end: Long = endMs): List<DataPoint> {
             return try {
-                readData(type, start, end)
+                readDataChunked(type, start, end)
             } catch (t: Throwable) {
                 warnings += "$label：${t.message ?: t.javaClass.simpleName}"
                 emptyList()
@@ -150,20 +205,41 @@ class OppoHealthReader(private val context: Context) {
             .distinctBy { it.dayStartMs }
             .sortedBy { it.dayStartMs }
 
-        val sleepPoints = readOrEmpty(DataType.TYPE_SLEEP, "睡眠")
-            .mapNotNull(::sleepWindowFromPoint)
+        // TYPE_SLEEP is stage/detail data. Read one extra day before the summary range so a sleep
+        // ending this morning can still include its pre-midnight stages.
+        val sleepStageStart = (startMs - 24L * 60L * 60L * 1000L).coerceAtLeast(1L)
+        val sleepStages = readOrEmpty(DataType.TYPE_SLEEP, "睡眠阶段", sleepStageStart, endMs)
+            .mapNotNull(::sleepStageFromPoint)
+            .distinctBy { Triple(it.startMs, it.endMs, it.stage) }
+            .sortedBy { it.startMs }
+
+        // TYPE_SLEEP_COUNT is the canonical whole-night summary/session source.
+        val sleepSessions = readOrEmpty(DataType.TYPE_SLEEP_COUNT, "睡眠统计")
+            .mapNotNull { point -> sleepWindowFromSummary(point, sleepStages) }
             .distinctBy { it.startMs to it.endMs }
             .sortedBy { it.startMs }
 
         return OppoSnapshot(
-            generatedAtMs = end,
+            generatedAtMs = endMs,
             heartRates = heartPoints,
             restingHeartRates = restingPoints,
             spo2 = spo2Points,
             dailyActivity = activityPoints,
-            sleep = sleepPoints,
+            sleep = sleepSessions,
             warnings = warnings
         )
+    }
+
+    private suspend fun readDataChunked(type: DataType, startMs: Long, endMs: Long): List<DataPoint> {
+        if (startMs > endMs) return emptyList()
+        val points = mutableListOf<DataPoint>()
+        var chunkStart = startMs
+        while (chunkStart <= endMs) {
+            val chunkEnd = min(chunkStart + MAX_QUERY_RANGE_MS - 1L, endMs)
+            points += readData(type, chunkStart, chunkEnd)
+            chunkStart = chunkEnd + 1L
+        }
+        return points
     }
 
     private suspend fun readData(type: DataType, startMs: Long, endMs: Long): List<DataPoint> {
@@ -186,30 +262,48 @@ class OppoHealthReader(private val context: Context) {
         }
     }
 
-    private fun sleepWindowFromPoint(point: DataPoint): SleepWindow? {
+    private fun sleepStageFromPoint(point: DataPoint): SleepStageWindow? {
+        val stage = safeInt(point, Element.ELEMENT_SLEEP) ?: return null
+        val start = normalizeTimestamp(point.startTimeStamp)
+        val end = normalizeTimestamp(point.timeStamp)
+        if (start <= 0L || end <= start || end - start > 24L * 60L * 60L * 1000L) return null
+        return SleepStageWindow(start, end, stage)
+    }
+
+    private fun sleepWindowFromSummary(point: DataPoint, allStages: List<SleepStageWindow>): SleepWindow? {
         val score = safeInt(point, Element.ELEMENT_SLEEP_SCORE)
         val fallAsleep = safeInt(point, Element.ELEMENT_FALL_ASLEEP)
         val sleepOut = safeInt(point, Element.ELEMENT_SLEEP_OUT)
-        val date = localDateFromRaw(point.timeStamp)
+        val date = localDateFromRaw(point.timeStamp) ?: return null
 
-        if (date != null && fallAsleep != null && sleepOut != null && fallAsleep in 0..1439 && sleepOut in 0..1439) {
-            val fallHour = fallAsleep / 60
-            val fallMinute = fallAsleep % 60
-            val outHour = sleepOut / 60
-            val outMinute = sleepOut % 60
-
-            val endDate = date
-            val startDate = if (sleepOut <= fallAsleep) date.minusDays(1) else date
-            val start = startDate.atTime(fallHour, fallMinute).atZone(zone).toInstant().toEpochMilli()
-            val end = endDate.atTime(outHour, outMinute).atZone(zone).toInstant().toEpochMilli()
-            if (validSleepWindow(start, end)) return SleepWindow(start, end, score)
+        if (fallAsleep == null || sleepOut == null || fallAsleep !in 0..1439 || sleepOut !in 0..1439) {
+            return null
         }
 
-        val rawStart = normalizeTimestamp(point.startTimeStamp)
-        val rawEnd = normalizeTimestamp(point.timeStamp)
-        if (validSleepWindow(rawStart, rawEnd)) return SleepWindow(rawStart, rawEnd, score)
+        val fallHour = fallAsleep / 60
+        val fallMinute = fallAsleep % 60
+        val outHour = sleepOut / 60
+        val outMinute = sleepOut % 60
 
-        return null
+        val endDate = date
+        val startDate = if (sleepOut <= fallAsleep) date.minusDays(1) else date
+        val start = startDate.atTime(fallHour, fallMinute).atZone(zone).toInstant().toEpochMilli()
+        val end = endDate.atTime(outHour, outMinute).atZone(zone).toInstant().toEpochMilli()
+        if (!validSleepWindow(start, end)) return null
+
+        val stages = allStages
+            .asSequence()
+            .filter { it.endMs > start && it.startMs < end }
+            .mapNotNull { stage ->
+                val clippedStart = maxOf(stage.startMs, start)
+                val clippedEnd = minOf(stage.endMs, end)
+                if (clippedEnd <= clippedStart) null else stage.copy(startMs = clippedStart, endMs = clippedEnd)
+            }
+            .distinctBy { Triple(it.startMs, it.endMs, it.stage) }
+            .sortedBy { it.startMs }
+            .toList()
+
+        return SleepWindow(start, end, score, stages)
     }
 
     private fun validSleepWindow(start: Long, end: Long): Boolean {
