@@ -192,7 +192,7 @@ class StorageProbeActivity : ComponentActivity() {
         }
 
         info.providers.orEmpty().forEach { p ->
-            appendLine("  PROVIDER ${p.name} | authority=${p.authority} | exported=${p.exported} | readPerm=${p.readPermission ?: "-"} | writePerm=${p.writePermission ?: "-"} | permission=${p.permission ?: "-"}")
+            appendLine("  PROVIDER ${p.name} | authority=${p.authority} | exported=${p.exported} | readPerm=${p.readPermission ?: "-"} | writePerm=${p.writePermission ?: "-"}")
         }
         info.services.orEmpty().forEach { s ->
             appendLine("  SERVICE ${s.name} | exported=${s.exported} | permission=${s.permission ?: "-"}")
