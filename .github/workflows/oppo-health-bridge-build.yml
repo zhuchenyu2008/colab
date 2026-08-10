@@ -27,6 +27,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Publish run id immediately
+        if: ${{ github.event_name == 'push' }}
+        run: |
+          mkdir -p .ci
+          cat > .ci/oppo-health-bridge-last-run.txt <<EOF
+          run_id=${{ github.run_id }}
+          run_number=${{ github.run_number }}
+          head_sha=${{ github.sha }}
+          artifact=OPPO-Health-Bridge-v0.3.1
+          version=0.3.1
+          state=started
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .ci/oppo-health-bridge-last-run.txt
+          git commit -m "ci: record OPPO bridge run start [skip ci]" || true
+          git push origin HEAD:oppo-health-bridge-fixes
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -97,20 +115,3 @@ jobs:
             signing-fingerprint.txt
           if-no-files-found: error
           retention-days: 30
-
-      - name: Publish successful run id
-        if: ${{ success() && github.event_name == 'push' }}
-        run: |
-          mkdir -p .ci
-          cat > .ci/oppo-health-bridge-last-run.txt <<EOF
-          run_id=${{ github.run_id }}
-          run_number=${{ github.run_number }}
-          head_sha=${{ github.sha }}
-          artifact=OPPO-Health-Bridge-v0.3.1
-          version=0.3.1
-          EOF
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .ci/oppo-health-bridge-last-run.txt
-          git commit -m "ci: record OPPO bridge build run [skip ci]" || exit 0
-          git push origin HEAD:oppo-health-bridge-fixes
