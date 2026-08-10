@@ -1,5 +1,6 @@
 package com.zhuchenyu.oppohealthbridge
 
+import android.content.Intent
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
@@ -121,8 +122,12 @@ class MainActivity : ComponentActivity() {
             refreshState()
         }, gap))
 
+        content.addView(actionButton("开发者信息 / OPPO 白名单资料", {
+            startActivity(Intent(this, DeveloperInfoActivity::class.java))
+        }, gap))
+
         content.addView(TextView(this).apply {
-            text = "注意：如果第 1 步直接返回 OPPO SDK 授权错误码，而没有出现授权页面，很可能是 OPPO 对第三方包名/签名/权限 scope 做了白名单限制。请把本页错误码截图发给我，我会据此继续处理。"
+            text = "已知真机结果：错误码 100006 表示 OPPO 健康拒绝当前应用权限。若授权页黑屏/立即退出且数据共享与授权中没有本 App，优先核对包名、当前 APK 签名、预申请 scope、Host 和白名单。"
             textSize = 13f
             setPadding(0, gap, 0, 0)
         })
@@ -163,7 +168,7 @@ class MainActivity : ComponentActivity() {
                 lines += "Health Connect：${t.message ?: t.javaClass.simpleName}"
             }
 
-            lines += "版本：0.1.0"
+            lines += "版本：${BuildConfig.VERSION_NAME}"
             setStatus(lines.joinToString("\n"))
         }
     }
@@ -211,7 +216,7 @@ class MainActivity : ComponentActivity() {
         return if (t is OppoSdkException) {
             val hint = when (t.errorCode) {
                 100004 -> "OPPO 健康账号未登录"
-                100006 -> "OPPO 健康拒绝权限"
+                100006 -> "OPPO 健康拒绝权限：重点检查包名、APK签名、预申请scope/白名单"
                 100007 -> "未安装 OPPO 健康"
                 100008 -> "OPPO 健康版本过低"
                 100012 -> "OPPO 健康授权失败"
