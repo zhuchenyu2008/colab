@@ -14,7 +14,9 @@ import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.lifecycleScope
 import com.heytap.databaseengine.HeytapHealthApi
+import com.heytap.databaseengine.apiv2.HResponse
 import com.heytap.databaseengine.apiv2._HeytapHealth
+import com.heytap.databaseengine.apiv2.auth.AuthResult
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -29,6 +31,7 @@ class MainActivity : ComponentActivity() {
     private var oppoAuthPending = false
     private var oppoAuthLeftApp = false
     private var lastOppoActivityResult: String? = null
+    @Volatile private var lastAuthCallback: String = "尚未触发"
 
     private val healthPermissionLauncher = registerForActivityResult(
         PermissionController.createRequestPermissionResultContract()
@@ -44,7 +47,7 @@ class MainActivity : ComponentActivity() {
         setContentView(buildUi())
 
         lifecycleScope.launch {
-            setStatus("正在按 OPPO 官方顺序初始化 Health SDK……")
+            setStatus("正在初始化 OPPO Health SDK 2.1.7，并等待内部 hasInit=true……")
             val ready = awaitOppoSdkReady()
             if (ready) {
                 refreshState()
@@ -65,8 +68,8 @@ class MainActivity : ComponentActivity() {
             oppoAuthPending = false
             oppoAuthLeftApp = false
             lifecycleScope.launch {
-                delay(350L)
-                validateOppoAuthorizationAfterReturn()
+                delay(500L)
+                validateOppoAuthorization("从 OPPO 健康返回（onResume）")
             }
         }
     }
@@ -103,7 +106,7 @@ class MainActivity : ComponentActivity() {
         })
 
         content.addView(TextView(this).apply {
-            text = "v0.3.1：授权流程改为 OPPO 官方 healthsdk_demo 的顺序，并等待 SDK 真正初始化完成。"
+            text = "v0.3.1：按 SDK 2.1.7 的真实 API 重新实现授权，并吸收 OPPO 官方 Demo 的初始化顺序。"
             textSize = 15f
             setPadding(0, 0, 0, gap)
         })
@@ -114,37 +117,8 @@ class MainActivity : ComponentActivity() {
         }
         content.addView(status)
 
-        content.addView(actionButton("1. 授权 OPPO 健康（官方 Demo 模式）", {
-            lifecycleScope.launch {
-                try {
-                    if (!reader.isHealthInstalled()) {
-                        setStatus("未检测到国行 OPPO 健康（com.heytap.health）。")
-                        return@launch
-                    }
-
-                    setStatus("正在等待 OPPO Health SDK 完成初始化……")
-                    if (!awaitOppoSdkReady()) {
-                        setStatus("SDK 初始化超时，没有发起授权。")
-                        return@launch
-                    }
-
-                    oppoAuthPending = true
-                    oppoAuthLeftApp = false
-                    lastOppoActivityResult = null
-                    setStatus(
-                        "SDK 已完成初始化（hasInit=true）。\n" +
-                            "现在按 OPPO 官方 Demo 调用 authorityApi().request(Activity)…"
-                    )
-
-                    // OPPO official healthsdk_demo uses this overload and receives the result
-                    // through Activity return/onActivityResult, then checks authorityApi().valid().
-                    HeytapHealthApi.getInstance().authorityApi().request(this@MainActivity)
-                } catch (t: Throwable) {
-                    oppoAuthPending = false
-                    oppoAuthLeftApp = false
-                    setStatus("OPPO 官方模式授权调用失败：${friendlyError(t)}")
-                }
-            }
+        content.addView(actionButton("1. 授权 OPPO 健康（2.1.7 重写版）", {
+            requestOppoAuthorization()
         }, gap))
 
         content.addView(actionButton("2. 授权 Health Connect 写入", {
@@ -205,7 +179,7 @@ class MainActivity : ComponentActivity() {
         }, gap))
 
         content.addView(TextView(this).apply {
-            text = "本版是诊断版：如果 hasInit=true、官方 request(Activity) 能拉起 OPPO 健康，但返回后 valid() 仍是 100006，才更有把握把问题归到 OPPO 侧的应用身份/预申请权限。"
+            text = "诊断重点：SDK 2.1.7 编译期只提供带 HResponse<AuthResult> 的 request 重载，因此不再照搬旧版 1.1.5 Demo 的 request(Activity)。本版只保留官方 Demo 中仍适用于 2.1.7 的初始化等待、Manifest queries 与 singleTop 生命周期处理。"
             textSize = 13f
             setPadding(0, gap, 0, 0)
         })
@@ -215,20 +189,95 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private suspend fun validateOppoAuthorizationAfterReturn() {
-        val resultText = lastOppoActivityResult?.let { "ActivityResult：$it" }
-            ?: "ActivityResult：未收到（通过 onResume 检测到从 OPPO 健康返回）"
+    private fun requestOppoAuthorization() {
+        lifecycleScope.launch {
+            try {
+                if (!reader.isHealthInstalled()) {
+                    setStatus("未检测到国行 OPPO 健康（com.heytap.health）。")
+                    return@launch
+                }
 
+                setStatus("正在等待 OPPO Health SDK 真正初始化完成……")
+                if (!awaitOppoSdkReady()) {
+                    setStatus("SDK 初始化超时，没有发起授权。")
+                    return@launch
+                }
+
+                oppoAuthPending = true
+                oppoAuthLeftApp = false
+                lastOppoActivityResult = null
+                lastAuthCallback = "等待 SDK 回调"
+                setStatus(
+                    "SDK hasInit=true。\n" +
+                        "现在调用 SDK 2.1.7 的 authorityApi().request(Activity, HResponse<AuthResult>)……"
+                )
+
+                HeytapHealthApi.getInstance().authorityApi().request(
+                    this@MainActivity,
+                    object : HResponse<AuthResult> {
+                        override fun onSuccess(result: AuthResult) {
+                            lastAuthCallback = "onSuccess(errorCode=${result.errorCode})"
+                            runOnUiThread {
+                                oppoAuthPending = false
+                                oppoAuthLeftApp = false
+                                lifecycleScope.launch {
+                                    delay(200L)
+                                    validateOppoAuthorization("授权回调 onSuccess，errorCode=${result.errorCode}")
+                                }
+                            }
+                        }
+
+                        override fun onFailure(code: Int) {
+                            lastAuthCallback = "onFailure(code=$code)"
+                            runOnUiThread {
+                                oppoAuthPending = false
+                                oppoAuthLeftApp = false
+                                lifecycleScope.launch {
+                                    delay(200L)
+                                    validateOppoAuthorization("授权回调 onFailure，code=$code")
+                                }
+                            }
+                        }
+                    }
+                )
+            } catch (t: Throwable) {
+                oppoAuthPending = false
+                oppoAuthLeftApp = false
+                setStatus("OPPO 2.1.7 授权调用失败：${friendlyError(t)}")
+            }
+        }
+    }
+
+    private suspend fun validateOppoAuthorization(trigger: String) {
+        val activityResultText = lastOppoActivityResult ?: "未收到 onActivityResult"
         try {
             if (!awaitOppoSdkReady()) {
-                setStatus("已从 OPPO 健康返回。\n$resultText\n但 SDK hasInit=false。")
+                setStatus(
+                    "$trigger\n" +
+                        "SDK hasInit=false。\n" +
+                        "授权回调：$lastAuthCallback\n" +
+                        "ActivityResult：$activityResultText"
+                )
                 return
             }
+
             val scopes = reader.authorizedScopes()
             val scopeText = scopes.joinToString("\n").ifBlank { "（没有返回 scope）" }
-            setStatus("已从 OPPO 健康返回。\n$resultText\nvalid() 成功，当前 scope：\n$scopeText")
+            setStatus(
+                "$trigger\n" +
+                    "SDK hasInit=true\n" +
+                    "授权回调：$lastAuthCallback\n" +
+                    "ActivityResult：$activityResultText\n" +
+                    "valid() 成功，当前 scope：\n$scopeText"
+            )
         } catch (t: Throwable) {
-            setStatus("已从 OPPO 健康返回。\n$resultText\n随后 valid() 失败：${friendlyError(t)}")
+            setStatus(
+                "$trigger\n" +
+                    "SDK hasInit=${_HeytapHealth.hasInit()}\n" +
+                    "授权回调：$lastAuthCallback\n" +
+                    "ActivityResult：$activityResultText\n" +
+                    "valid()：${friendlyError(t)}"
+            )
         }
     }
 
@@ -261,6 +310,8 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            lines += "最近授权回调：$lastAuthCallback"
+
             if (!writer.isAvailable()) {
                 lines += healthConnectAvailabilityText()
             } else {
@@ -273,8 +324,8 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            lines += "OPPO 授权方式：官方 request(Activity)"
-            lines += "OPPO Health SDK：2.1.7"
+            lines += "OPPO 授权方式：SDK 2.1.7 request(Activity, HResponse<AuthResult>)"
+            lines += "SDK 初始化：等待 _HeytapHealth.hasInit()=true"
             lines += "版本：${BuildConfig.VERSION_NAME}"
             setStatus(lines.joinToString("\n"))
         }
