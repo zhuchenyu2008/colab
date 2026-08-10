@@ -10,6 +10,8 @@
 
     <queries>
         <package android:name="com.heytap.health" />
+        <package android:name="com.oppo.market" />
+        <package android:name="com.heytap.market" />
         <package android:name="com.google.android.apps.healthdata" />
     </queries>
 
@@ -44,6 +46,7 @@
 
         <activity
             android:name=".MainActivity"
+            android:launchMode="singleTop"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
