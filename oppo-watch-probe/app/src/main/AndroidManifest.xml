@@ -15,12 +15,17 @@
 
     <application
         android:allowBackup="false"
-        android:label="Watch Sensor Probe"
+        android:label="Watch Storage Probe"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
         <activity
             android:name=".MainActivity"
+            android:screenOrientation="portrait"
+            android:exported="false" />
+
+        <activity
+            android:name=".StorageProbeActivity"
             android:screenOrientation="portrait"
             android:exported="true">
             <intent-filter>
