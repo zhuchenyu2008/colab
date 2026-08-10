@@ -34,13 +34,13 @@ class DeveloperInfoActivity : ComponentActivity() {
         }
 
         content.addView(TextView(this).apply {
-            text = "开发者信息 / OPPO 白名单资料"
+            text = "开发者信息 / OPPO 授权排障"
             textSize = 23f
             setPadding(0, 0, 0, gap)
         })
 
         content.addView(TextView(this).apply {
-            text = "以下签名摘要从当前实际安装的 APK 动态计算，可直接截图或复制给 OPPO 开放平台/技术支持。"
+            text = "以下包名和签名摘要均从当前实际安装 APK 动态读取。先用它确认每次安装的签名是否保持一致；只有技术项全部排除后，再用于 OPPO 官方预申请/白名单。"
             textSize = 14f
             setPadding(0, 0, 0, gap)
         })
@@ -68,7 +68,7 @@ class DeveloperInfoActivity : ComponentActivity() {
         })
 
         content.addView(TextView(this).apply {
-            text = "\n已知真机现象：authorityApi().request() 可拉起 OPPO 健康，但授权 Activity 会立即退出，随后 authorityApi().valid() 返回 100006（ERR_PERMISSION_DENY）。这通常需要 OPPO 侧核对包名、签名、预申请权限、Host/白名单。"
+            text = "\n当前排障目标：如果同一固定签名 APK 仍稳定返回 100006，再把包名、SHA-1/SHA-256 和所需 scopes 交给 OPPO 官方处理。不要在签名尚未固定时提交白名单资料。"
             textSize = 13f
         })
 
@@ -83,7 +83,7 @@ class DeveloperInfoActivity : ComponentActivity() {
             appendLine("App: OPPO Health Bridge")
             appendLine("Package: $packageName")
             appendLine("Version: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
-            appendLine("OPPO Health SDK: 2.1.7")
+            appendLine("OPPO Health SDK: 2.1.7（HeyTap 官方 Maven）")
             appendLine("OPPO Health package: com.heytap.health")
             appendLine("Callback Host: 未显式指定，使用 OPPO Health SDK 默认回调")
             appendLine()
@@ -93,7 +93,7 @@ class DeveloperInfoActivity : ComponentActivity() {
             appendLine("Signing SHA-256:")
             appendLine(signatures.second)
             appendLine()
-            appendLine("申请的只读健康权限 / scopes:")
+            appendLine("希望获得的只读健康 scopes（由 OPPO 侧预配置，不是 App 自行声明即可获得）:")
             appendLine("- READ_HEART_RATE")
             appendLine("- READ_BLOOD_OXYGEN_DATA")
             appendLine("- READ_SLEEP_DATA")
@@ -102,7 +102,7 @@ class DeveloperInfoActivity : ComponentActivity() {
             appendLine("用途:")
             appendLine("读取用户本人已授权的 OPPO 健康数据，并写入 Android Health Connect；不向 OPPO 健康写入数据。")
             appendLine()
-            appendLine("当前已知错误:")
+            appendLine("当前重点观察错误:")
             appendLine("100006 / ERR_PERMISSION_DENY")
         }.trim()
     }
