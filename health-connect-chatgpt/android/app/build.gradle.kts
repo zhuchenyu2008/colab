@@ -3,6 +3,17 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val signingStoreFilePath = System.getenv("HEALTH_BRIDGE_SIGNING_STORE_FILE")?.trim().orEmpty()
+val signingStorePassword = System.getenv("HEALTH_BRIDGE_SIGNING_STORE_PASSWORD")?.trim().orEmpty()
+val signingKeyAlias = System.getenv("HEALTH_BRIDGE_SIGNING_KEY_ALIAS")?.trim().orEmpty()
+val signingKeyPassword = System.getenv("HEALTH_BRIDGE_SIGNING_KEY_PASSWORD")?.trim().orEmpty()
+val hasStableSigning = listOf(
+    signingStoreFilePath,
+    signingStorePassword,
+    signingKeyAlias,
+    signingKeyPassword
+).all { it.isNotBlank() }
+
 android {
     namespace = "com.zhuchenyu.healthchatbridge"
     compileSdk = 36
@@ -19,13 +30,32 @@ android {
         buildConfig = true
     }
 
+    signingConfigs {
+        if (hasStableSigning) {
+            create("healthBridgeStable") {
+                storeFile = file(signingStoreFilePath)
+                storePassword = signingStorePassword
+                keyAlias = signingKeyAlias
+                keyPassword = signingKeyPassword
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            if (hasStableSigning) {
+                signingConfig = signingConfigs.getByName("healthBridgeStable")
+            }
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            if (hasStableSigning) {
+                signingConfig = signingConfigs.getByName("healthBridgeStable")
+            }
         }
     }
 
