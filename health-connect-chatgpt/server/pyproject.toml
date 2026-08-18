@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "health-connect-chatgpt-bridge"
+version = "0.1.0"
+description = "Private Health Connect ingest API and read-only MCP server"
+requires-python = ">=3.11"
+dependencies = [
+  "mcp==2.0.0",
+  "starlette>=0.47,<1",
+  "uvicorn[standard]>=0.35,<1",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8.4,<9",
+  "httpx>=0.28,<1",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["health_bridge*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
