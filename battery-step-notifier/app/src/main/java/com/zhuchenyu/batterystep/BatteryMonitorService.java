@@ -265,6 +265,11 @@ public class BatteryMonitorService extends Service {
     }
 
     private boolean isDeviceConnected(String address) {
+        if (Build.VERSION.SDK_INT >= 31
+                && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            return false;
+        }
+
         try {
             BluetoothManager manager = getSystemService(BluetoothManager.class);
             if (manager == null) return false;
@@ -280,9 +285,13 @@ public class BatteryMonitorService extends Service {
             } catch (Exception ignored) {
             }
 
-            List<BluetoothDevice> gatt = manager.getConnectedDevices(BluetoothProfile.GATT);
-            for (BluetoothDevice device : gatt) {
-                if (address.equalsIgnoreCase(device.getAddress())) return true;
+            try {
+                List<BluetoothDevice> gatt = manager.getConnectedDevices(BluetoothProfile.GATT);
+                for (BluetoothDevice device : gatt) {
+                    if (address.equalsIgnoreCase(device.getAddress())) return true;
+                }
+            } catch (SecurityException ignored) {
+                return false;
             }
         } catch (Exception ignored) {
         }
