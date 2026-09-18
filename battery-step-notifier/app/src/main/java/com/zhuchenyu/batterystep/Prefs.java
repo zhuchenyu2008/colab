@@ -7,6 +7,7 @@ public final class Prefs {
     private static final String FILE = "battery_step_prefs";
     private static final String KEY_ENABLED = "enabled";
     private static final String KEY_STEP = "step";
+    private static final String KEY_HIDE_RECENTS = "hide_recents";
 
     private Prefs() {}
 
@@ -28,5 +29,13 @@ public final class Prefs {
 
     public static void setStep(Context context, int step) {
         prefs(context).edit().putInt(KEY_STEP, Math.max(1, Math.min(20, step))).apply();
+    }
+
+    public static boolean hideFromRecents(Context context) {
+        return prefs(context).getBoolean(KEY_HIDE_RECENTS, false);
+    }
+
+    public static void setHideFromRecents(Context context, boolean hide) {
+        prefs(context).edit().putBoolean(KEY_HIDE_RECENTS, hide).apply();
     }
 }
