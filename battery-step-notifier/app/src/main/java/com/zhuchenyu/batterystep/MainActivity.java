@@ -24,6 +24,7 @@ public class MainActivity extends Activity {
     private static final int REQ_NOTIFICATIONS = 100;
 
     private Switch enabledSwitch;
+    private Switch hideRecentsSwitch;
     private SeekBar stepSeek;
     private TextView stepText;
     private TextView statusText;
@@ -48,6 +49,7 @@ public class MainActivity extends Activity {
         stepSeek.setProgress(savedStep - 1);
         stepText.setText(savedStep + "%");
         enabledSwitch.setChecked(Prefs.isEnabled(this));
+        hideRecentsSwitch.setChecked(Prefs.hideFromRecents(this));
 
         enabledSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> {
             Prefs.setEnabled(this, isChecked);
@@ -62,6 +64,16 @@ public class MainActivity extends Activity {
             renderStatus();
         });
 
+        hideRecentsSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            Prefs.setHideFromRecents(this, isChecked);
+            RecentsHelper.setExcluded(this, isChecked);
+            Toast.makeText(
+                    this,
+                    isChecked ? "已从最近任务页面隐藏" : "已恢复显示在最近任务页面",
+                    Toast.LENGTH_SHORT
+            ).show();
+        });
+
         stepSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
@@ -70,6 +82,8 @@ public class MainActivity extends Activity {
             @Override public void onStartTrackingTouch(SeekBar seekBar) {}
             @Override public void onStopTrackingTouch(SeekBar seekBar) {}
         });
+
+        RecentsHelper.setExcluded(this, Prefs.hideFromRecents(this));
     }
 
     private LinearLayout buildUi() {
@@ -101,6 +115,17 @@ public class MainActivity extends Activity {
         switchHint.setText("打开后立即启动后台监测；关闭后立即停止后台服务和电量提醒。状态会被记住。\n");
         switchHint.setTextSize(13);
         root.addView(switchHint, matchWrap());
+
+        hideRecentsSwitch = new Switch(this);
+        hideRecentsSwitch.setText("在最近任务页面隐藏");
+        hideRecentsSwitch.setTextSize(17);
+        hideRecentsSwitch.setPadding(0, dp(4), 0, dp(4));
+        root.addView(hideRecentsSwitch, matchWrap());
+
+        TextView hideHint = new TextView(this);
+        hideHint.setText("开启后仍可从桌面图标或通知进入 App，只是不出现在最近任务列表中。\n");
+        hideHint.setTextSize(13);
+        root.addView(hideHint, matchWrap());
 
         TextView stepLabel = new TextView(this);
         stepLabel.setText("每提升多少电量提醒");
@@ -157,6 +182,7 @@ public class MainActivity extends Activity {
             sticky = registerReceiver(batteryReceiver, filter);
         }
         if (sticky != null) updateBatteryState(sticky);
+        RecentsHelper.setExcluded(this, Prefs.hideFromRecents(this));
         renderStatus();
     }
 
