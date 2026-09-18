@@ -49,6 +49,19 @@ public class MainActivity extends Activity {
         stepText.setText(savedStep + "%");
         enabledSwitch.setChecked(Prefs.isEnabled(this));
 
+        enabledSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            Prefs.setEnabled(this, isChecked);
+            if (isChecked) {
+                requestNotificationPermissionIfNeeded();
+                BatteryMonitorService.start(this);
+                Toast.makeText(this, "监测已开启", Toast.LENGTH_SHORT).show();
+            } else {
+                BatteryMonitorService.stop(this);
+                Toast.makeText(this, "监测已关闭", Toast.LENGTH_SHORT).show();
+            }
+            renderStatus();
+        });
+
         stepSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
@@ -79,12 +92,18 @@ public class MainActivity extends Activity {
         root.addView(description, matchWrap());
 
         enabledSwitch = new Switch(this);
-        enabledSwitch.setText("自动后台监测（重启后恢复）");
-        enabledSwitch.setTextSize(17);
+        enabledSwitch.setText("总开关");
+        enabledSwitch.setTextSize(19);
+        enabledSwitch.setPadding(0, dp(6), 0, dp(4));
         root.addView(enabledSwitch, matchWrap());
 
+        TextView switchHint = new TextView(this);
+        switchHint.setText("打开后立即启动后台监测；关闭后立即停止后台服务和电量提醒。状态会被记住。\n");
+        switchHint.setTextSize(13);
+        root.addView(switchHint, matchWrap());
+
         TextView stepLabel = new TextView(this);
-        stepLabel.setText("\n每提升多少电量提醒");
+        stepLabel.setText("每提升多少电量提醒");
         stepLabel.setTextSize(16);
         root.addView(stepLabel, matchWrap());
 
@@ -102,8 +121,8 @@ public class MainActivity extends Activity {
         root.addView(statusText, matchWrap());
 
         Button save = new Button(this);
-        save.setText("保存并应用");
-        save.setOnClickListener(v -> saveAndApply());
+        save.setText("保存提醒间隔");
+        save.setOnClickListener(v -> saveStep());
         root.addView(save, matchWrap());
 
         Button settings = new Button(this);
@@ -112,7 +131,7 @@ public class MainActivity extends Activity {
         root.addView(settings, matchWrap());
 
         TextView note = new TextView(this);
-        note.setText("\n说明：开启后会保留一个低优先级前台服务通知，以减少系统清理后台导致漏提醒。服务不使用网络、定位或 WakeLock。");
+        note.setText("\n说明：总开关开启时会保留一个低优先级前台服务通知，以减少系统清理后台导致漏提醒。服务不使用网络、定位或 WakeLock。");
         note.setTextSize(12);
         root.addView(note, matchWrap());
         return root;
@@ -149,19 +168,13 @@ public class MainActivity extends Activity {
         super.onStop();
     }
 
-    private void saveAndApply() {
+    private void saveStep() {
         int step = stepSeek.getProgress() + 1;
-        boolean enabled = enabledSwitch.isChecked();
         Prefs.setStep(this, step);
-        Prefs.setEnabled(this, enabled);
-
-        if (enabled) {
-            requestNotificationPermissionIfNeeded();
+        if (Prefs.isEnabled(this)) {
             BatteryMonitorService.refresh(this);
-        } else {
-            BatteryMonitorService.stop(this);
         }
-        Toast.makeText(this, "设置已应用", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "提醒间隔已保存：" + step + "%", Toast.LENGTH_SHORT).show();
         renderStatus();
     }
 
@@ -200,11 +213,11 @@ public class MainActivity extends Activity {
         String battery = currentLevel >= 0 ? currentLevel + "%" : "未知";
         int step = Prefs.getStep(this);
         if (!Prefs.isEnabled(this)) {
-            statusText.setText("监测已关闭 · 当前电量 " + battery);
+            statusText.setText("总开关：关闭 · 当前电量 " + battery);
         } else if (currentCharging) {
-            statusText.setText("正在充电 · 当前 " + battery + " · 每提升 " + step + "% 提醒");
+            statusText.setText("总开关：开启 · 正在充电 · 当前 " + battery + " · 每提升 " + step + "% 提醒");
         } else {
-            statusText.setText("后台待机中 · 当前 " + battery + " · 插电后开始计算");
+            statusText.setText("总开关：开启 · 后台待机 · 当前 " + battery + " · 插电后自动开始计算");
         }
     }
 }
