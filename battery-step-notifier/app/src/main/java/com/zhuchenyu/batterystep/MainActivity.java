@@ -103,7 +103,7 @@ public class MainActivity extends Activity {
             } else {
                 Prefs.setBluetoothAutoEnabled(this, false);
                 BatteryMonitorService.applyConfig(this);
-                Toast.makeText(this, "蓝牙自动开启已关闭", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "蓝牙自动联动已关闭", Toast.LENGTH_SHORT).show();
             }
             renderStatus();
         });
@@ -157,7 +157,7 @@ public class MainActivity extends Activity {
         root.addView(enabledSwitch, matchWrap());
 
         TextView switchHint = new TextView(this);
-        switchHint.setText("打开后监测充电电量；关闭后停止电量提醒。蓝牙自动化可在指定设备连接时重新打开它。\n");
+        switchHint.setText("打开后监测充电电量；关闭后停止电量提醒。蓝牙自动联动开启时，指定设备的连接状态会自动控制此开关。\n");
         switchHint.setTextSize(13);
         root.addView(switchHint, matchWrap());
 
@@ -172,7 +172,7 @@ public class MainActivity extends Activity {
         root.addView(automationTitle, matchWrap());
 
         bluetoothAutoSwitch = new Switch(this);
-        bluetoothAutoSwitch.setText("指定蓝牙设备连接时自动开启");
+        bluetoothAutoSwitch.setText("指定蓝牙设备连接 / 断开联动总开关");
         bluetoothAutoSwitch.setTextSize(17);
         root.addView(bluetoothAutoSwitch, matchWrap());
 
@@ -187,7 +187,7 @@ public class MainActivity extends Activity {
         root.addView(bluetoothDeviceButton, matchWrap());
 
         TextView bluetoothHint = new TextView(this);
-        bluetoothHint.setText("只读取系统已经配对的设备，不进行蓝牙扫描。设备连接后会把总开关自动打开；断开时不会强制关闭。\n");
+        bluetoothHint.setText("只读取系统已经配对的设备，不进行蓝牙扫描。指定设备连接后自动打开总开关；断开后自动关闭总开关。其他蓝牙设备不会影响。\n");
         bluetoothHint.setTextSize(13);
         root.addView(bluetoothHint, matchWrap());
 
@@ -234,7 +234,7 @@ public class MainActivity extends Activity {
         root.addView(settings, matchWrap());
 
         TextView note = new TextView(this);
-        note.setText("\n说明：总开关开启，或蓝牙自动开启功能正在等待设备时，会保留一个低优先级前台服务通知，以减少系统清理后台导致漏触发。服务不使用网络、定位或 WakeLock。");
+        note.setText("\n说明：总开关开启，或蓝牙自动联动正在等待指定设备时，会保留一个低优先级前台服务通知，以减少系统清理后台导致漏触发。服务不使用网络、定位或 WakeLock。");
         note.setTextSize(12);
         root.addView(note, matchWrap());
         return scroll;
@@ -301,7 +301,7 @@ public class MainActivity extends Activity {
         if (Prefs.getBluetoothAddress(this).isEmpty()) {
             showPairedDevicePicker();
         } else {
-            Toast.makeText(this, "蓝牙自动开启已启用", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "蓝牙自动联动已启用", Toast.LENGTH_SHORT).show();
         }
         updateBluetoothDeviceButton();
     }
