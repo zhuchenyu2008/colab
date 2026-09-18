@@ -1,18 +1,28 @@
 package com.zhuchenyu.batterystep;
 
+import android.Manifest;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothManager;
+import android.bluetooth.BluetoothProfile;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
+import android.media.AudioManager;
 import android.os.BatteryManager;
 import android.os.Build;
 import android.os.IBinder;
+
+import java.lang.reflect.Method;
+import java.util.List;
 
 public class BatteryMonitorService extends Service {
     public static final String ACTION_REFRESH = "com.zhuchenyu.batterystep.REFRESH";
@@ -23,12 +33,14 @@ public class BatteryMonitorService extends Service {
 
     private boolean receiverRegistered;
     private boolean charging;
+    private boolean quietPaused;
+    private boolean selectedDeviceConnected;
     private int currentLevel = -1;
     private int sessionStart = -1;
     private int nextTarget = -1;
     private int step = 1;
 
-    private final BroadcastReceiver batteryReceiver = new BroadcastReceiver() {
+    private final BroadcastReceiver systemReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
             String action = intent.getAction();
@@ -36,10 +48,19 @@ public class BatteryMonitorService extends Service {
                 handleBatteryChanged(intent);
             } else if (Intent.ACTION_POWER_CONNECTED.equals(action)) {
                 charging = true;
-                if (currentLevel >= 0) beginSession(currentLevel);
+                if (monitoringAllowed() && currentLevel >= 0) beginSession(currentLevel);
                 updateForeground();
             } else if (Intent.ACTION_POWER_DISCONNECTED.equals(action)) {
-                endSession();
+                charging = false;
+                clearSessionTargets();
+                updateForeground();
+            } else if (BluetoothDevice.ACTION_ACL_CONNECTED.equals(action)
+                    || BluetoothDevice.ACTION_ACL_DISCONNECTED.equals(action)) {
+                handleBluetoothEvent(intent, BluetoothDevice.ACTION_ACL_CONNECTED.equals(action));
+            } else if (AudioManager.RINGER_MODE_CHANGED_ACTION.equals(action)
+                    || NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED.equals(action)
+                    || NotificationManager.ACTION_NOTIFICATION_POLICY_ACCESS_GRANTED_CHANGED.equals(action)) {
+                updateQuietPauseState();
                 updateForeground();
             }
         }
@@ -47,19 +68,33 @@ public class BatteryMonitorService extends Service {
 
     public static void start(Context context) {
         Intent intent = new Intent(context, BatteryMonitorService.class);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(intent);
-        } else {
-            context.startService(intent);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent);
+            } else {
+                context.startService(intent);
+            }
+        } catch (RuntimeException ignored) {
         }
     }
 
     public static void refresh(Context context) {
         Intent intent = new Intent(context, BatteryMonitorService.class).setAction(ACTION_REFRESH);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(intent);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent);
+            } else {
+                context.startService(intent);
+            }
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    public static void applyConfig(Context context) {
+        if (Prefs.shouldKeepServiceRunning(context)) {
+            refresh(context);
         } else {
-            context.startService(intent);
+            stop(context);
         }
     }
 
@@ -72,24 +107,30 @@ public class BatteryMonitorService extends Service {
         super.onCreate();
         createChannels();
         step = Prefs.getStep(this);
+        quietPaused = isQuietModeBlocking();
         startInForeground();
-        registerBatteryReceiver();
+        registerSystemReceiver();
+        checkSelectedDeviceNow();
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (!Prefs.isEnabled(this)) {
+        if (!Prefs.shouldKeepServiceRunning(this)) {
             stopSelf();
             return START_NOT_STICKY;
         }
-        if (intent != null && ACTION_REFRESH.equals(intent.getAction())) {
-            int newStep = Prefs.getStep(this);
-            if (newStep != step) {
-                step = newStep;
-                if (charging && currentLevel >= 0) beginSession(currentLevel);
-            }
-            updateForeground();
+
+        int newStep = Prefs.getStep(this);
+        if (newStep != step) {
+            step = newStep;
+            if (monitoringAllowed() && charging && currentLevel >= 0) beginSession(currentLevel);
         }
+
+        updateQuietPauseState();
+        if (Prefs.isBluetoothAutoEnabled(this)) {
+            checkSelectedDeviceNow();
+        }
+        updateForeground();
         return START_STICKY;
     }
 
@@ -97,8 +138,9 @@ public class BatteryMonitorService extends Service {
     public void onDestroy() {
         if (receiverRegistered) {
             try {
-                unregisterReceiver(batteryReceiver);
-            } catch (IllegalArgumentException ignored) {}
+                unregisterReceiver(systemReceiver);
+            } catch (IllegalArgumentException ignored) {
+            }
             receiverRegistered = false;
         }
         super.onDestroy();
@@ -109,17 +151,22 @@ public class BatteryMonitorService extends Service {
         return null;
     }
 
-    private void registerBatteryReceiver() {
+    private void registerSystemReceiver() {
         IntentFilter filter = new IntentFilter();
         filter.addAction(Intent.ACTION_BATTERY_CHANGED);
         filter.addAction(Intent.ACTION_POWER_CONNECTED);
         filter.addAction(Intent.ACTION_POWER_DISCONNECTED);
+        filter.addAction(BluetoothDevice.ACTION_ACL_CONNECTED);
+        filter.addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED);
+        filter.addAction(AudioManager.RINGER_MODE_CHANGED_ACTION);
+        filter.addAction(NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED);
+        filter.addAction(NotificationManager.ACTION_NOTIFICATION_POLICY_ACCESS_GRANTED_CHANGED);
 
         Intent sticky;
         if (Build.VERSION.SDK_INT >= 33) {
-            sticky = registerReceiver(batteryReceiver, filter, Context.RECEIVER_EXPORTED);
+            sticky = registerReceiver(systemReceiver, filter, Context.RECEIVER_EXPORTED);
         } else {
-            sticky = registerReceiver(batteryReceiver, filter);
+            sticky = registerReceiver(systemReceiver, filter);
         }
         receiverRegistered = true;
         if (sticky != null && Intent.ACTION_BATTERY_CHANGED.equals(sticky.getAction())) {
@@ -141,31 +188,152 @@ public class BatteryMonitorService extends Service {
 
         currentLevel = level;
         step = Prefs.getStep(this);
+        updateQuietPauseState();
 
         if (nowCharging && !charging) {
             charging = true;
-            beginSession(level);
+            if (monitoringAllowed()) beginSession(level);
         } else if (!nowCharging && charging) {
-            endSession();
+            charging = false;
+            clearSessionTargets();
         }
 
-        if (charging && nextTarget > 0 && level >= nextTarget) {
-            while (nextTarget <= level && nextTarget <= 100) {
+        if (!monitoringAllowed()) {
+            clearSessionTargets();
+        } else if (charging && nextTarget <= 0) {
+            beginSession(level);
+        }
+
+        if (charging && monitoringAllowed() && nextTarget > 0 && level >= nextTarget) {
+            while (nextTarget > 0 && nextTarget <= level && nextTarget <= 100) {
                 notifyThreshold(nextTarget, level);
                 nextTarget += step;
+                if (nextTarget > 100) nextTarget = -1;
             }
         }
         updateForeground();
     }
 
+    private void handleBluetoothEvent(Intent intent, boolean connected) {
+        if (!Prefs.isBluetoothAutoEnabled(this) || !hasBluetoothPermission()) return;
+        BluetoothDevice device = getBluetoothDevice(intent);
+        if (device == null) return;
+
+        String selected = Prefs.getBluetoothAddress(this);
+        if (selected.isEmpty()) return;
+
+        try {
+            if (!selected.equalsIgnoreCase(device.getAddress())) return;
+        } catch (SecurityException e) {
+            return;
+        }
+
+        selectedDeviceConnected = connected;
+        if (connected) {
+            Prefs.setEnabled(this, true);
+            updateQuietPauseState();
+            if (monitoringAllowed() && charging && currentLevel >= 0) beginSession(currentLevel);
+        }
+        updateForeground();
+    }
+
+    @SuppressWarnings("deprecation")
+    private BluetoothDevice getBluetoothDevice(Intent intent) {
+        if (Build.VERSION.SDK_INT >= 33) {
+            return intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice.class);
+        }
+        return intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+    }
+
+    private void checkSelectedDeviceNow() {
+        if (!Prefs.isBluetoothAutoEnabled(this) || !hasBluetoothPermission()) {
+            selectedDeviceConnected = false;
+            return;
+        }
+        String address = Prefs.getBluetoothAddress(this);
+        if (address.isEmpty()) {
+            selectedDeviceConnected = false;
+            return;
+        }
+
+        selectedDeviceConnected = isDeviceConnected(address);
+        if (selectedDeviceConnected && !Prefs.isEnabled(this)) {
+            Prefs.setEnabled(this, true);
+            updateQuietPauseState();
+            if (monitoringAllowed() && charging && currentLevel >= 0) beginSession(currentLevel);
+        }
+    }
+
+    private boolean isDeviceConnected(String address) {
+        try {
+            BluetoothManager manager = getSystemService(BluetoothManager.class);
+            if (manager == null) return false;
+            BluetoothAdapter adapter = manager.getAdapter();
+            if (adapter == null || !adapter.isEnabled()) return false;
+            BluetoothDevice target = adapter.getRemoteDevice(address);
+
+            try {
+                Method method = BluetoothDevice.class.getMethod("isConnected", int.class);
+                Object bredr = method.invoke(target, BluetoothDevice.TRANSPORT_BREDR);
+                Object le = method.invoke(target, BluetoothDevice.TRANSPORT_LE);
+                if (Boolean.TRUE.equals(bredr) || Boolean.TRUE.equals(le)) return true;
+            } catch (Exception ignored) {
+            }
+
+            List<BluetoothDevice> gatt = manager.getConnectedDevices(BluetoothProfile.GATT);
+            for (BluetoothDevice device : gatt) {
+                if (address.equalsIgnoreCase(device.getAddress())) return true;
+            }
+        } catch (Exception ignored) {
+        }
+        return false;
+    }
+
+    private boolean hasBluetoothPermission() {
+        return Build.VERSION.SDK_INT < 31
+                || checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void updateQuietPauseState() {
+        boolean newPaused = isQuietModeBlocking();
+        if (newPaused == quietPaused) return;
+        quietPaused = newPaused;
+        if (quietPaused) {
+            clearSessionTargets();
+        } else if (Prefs.isEnabled(this) && charging && currentLevel >= 0) {
+            beginSession(currentLevel);
+        }
+    }
+
+    private boolean isQuietModeBlocking() {
+        if (!Prefs.pauseOnQuietMode(this)) return false;
+
+        AudioManager audio = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        if (audio != null && audio.getRingerMode() == AudioManager.RINGER_MODE_SILENT) {
+            return true;
+        }
+
+        NotificationManager notifications = getSystemService(NotificationManager.class);
+        if (notifications != null && notifications.isNotificationPolicyAccessGranted()) {
+            int filter = notifications.getCurrentInterruptionFilter();
+            return filter != NotificationManager.INTERRUPTION_FILTER_ALL
+                    && filter != NotificationManager.INTERRUPTION_FILTER_UNKNOWN;
+        }
+        return false;
+    }
+
+    private boolean monitoringAllowed() {
+        return Prefs.isEnabled(this) && !quietPaused;
+    }
+
     private void beginSession(int level) {
         sessionStart = level;
         step = Prefs.getStep(this);
-        nextTarget = Math.min(100, level + step);
+        int target = level + step;
+        nextTarget = target <= 100 ? target : -1;
     }
 
-    private void endSession() {
-        charging = false;
+    private void clearSessionTargets() {
         sessionStart = -1;
         nextTarget = -1;
     }
@@ -196,15 +364,30 @@ public class BatteryMonitorService extends Service {
         PendingIntent open = PendingIntent.getActivity(
                 this, 0, new Intent(this, MainActivity.class),
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        String title = charging ? "正在监测充电电量" : "电量提醒已待机";
+
+        String title;
         String text;
-        if (charging && currentLevel >= 0 && nextTarget > 0) {
+        if (!Prefs.isEnabled(this)) {
+            title = "自动化待机";
+            if (Prefs.isBluetoothAutoEnabled(this)) {
+                text = "等待 " + Prefs.getBluetoothName(this) + " 连接后自动开启";
+            } else {
+                text = "电量监测已关闭";
+            }
+        } else if (quietPaused) {
+            title = "免打扰 / 静音中，监测已暂停";
+            text = "恢复普通响铃后会自动继续";
+        } else if (charging && currentLevel >= 0 && nextTarget > 0) {
+            title = "正在监测充电电量";
             text = "当前 " + currentLevel + "% · 下次 " + nextTarget + "% 提醒";
         } else if (charging) {
-            text = "已连接电源 · 等待电量变化";
+            title = "正在监测充电电量";
+            text = "当前 " + currentLevel + "% · 暂无下一档提醒";
         } else {
+            title = "电量提醒已待机";
             text = "未充电 · 插电后自动开始监测";
         }
+
         return new Notification.Builder(this, CHANNEL_MONITOR)
                 .setSmallIcon(android.R.drawable.ic_lock_idle_charging)
                 .setContentTitle(title)
