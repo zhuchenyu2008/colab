@@ -11,14 +11,9 @@ public final class RecentsHelper {
         ActivityManager manager = (ActivityManager) activity.getSystemService(Context.ACTIVITY_SERVICE);
         if (manager == null) return;
 
-        int currentTaskId = activity.getTaskId();
         for (ActivityManager.AppTask task : manager.getAppTasks()) {
             try {
-                ActivityManager.RecentTaskInfo info = task.getTaskInfo();
-                if (info != null && info.taskId == currentTaskId) {
-                    task.setExcludeFromRecents(excluded);
-                    return;
-                }
+                task.setExcludeFromRecents(excluded);
             } catch (Exception ignored) {
             }
         }
