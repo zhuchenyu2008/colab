@@ -233,6 +233,9 @@ public class BatteryMonitorService extends Service {
             Prefs.setEnabled(this, true);
             updateQuietPauseState();
             if (monitoringAllowed() && charging && currentLevel >= 0) beginSession(currentLevel);
+        } else {
+            Prefs.setEnabled(this, false);
+            clearSessionTargets();
         }
         updateForeground();
     }
@@ -257,10 +260,17 @@ public class BatteryMonitorService extends Service {
         }
 
         selectedDeviceConnected = isDeviceConnected(address);
-        if (selectedDeviceConnected && !Prefs.isEnabled(this)) {
-            Prefs.setEnabled(this, true);
-            updateQuietPauseState();
-            if (monitoringAllowed() && charging && currentLevel >= 0) beginSession(currentLevel);
+        if (selectedDeviceConnected) {
+            if (!Prefs.isEnabled(this)) {
+                Prefs.setEnabled(this, true);
+                updateQuietPauseState();
+                if (monitoringAllowed() && charging && currentLevel >= 0) beginSession(currentLevel);
+            }
+        } else {
+            if (Prefs.isEnabled(this)) {
+                Prefs.setEnabled(this, false);
+            }
+            clearSessionTargets();
         }
     }
 
@@ -379,7 +389,7 @@ public class BatteryMonitorService extends Service {
         if (!Prefs.isEnabled(this)) {
             title = "自动化待机";
             if (Prefs.isBluetoothAutoEnabled(this)) {
-                text = "等待 " + Prefs.getBluetoothName(this) + " 连接后自动开启";
+                text = "等待 " + Prefs.getBluetoothName(this) + " 重新连接后自动开启";
             } else {
                 text = "电量监测已关闭";
             }
