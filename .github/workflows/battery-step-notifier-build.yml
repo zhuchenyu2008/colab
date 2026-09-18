@@ -50,6 +50,22 @@ jobs:
           path: ~/.android/debug.keystore
           key: battery-step-notifier-debug-keystore-v1
 
+      - name: Ensure stable debug signing key
+        run: |
+          mkdir -p "$HOME/.android"
+          if [ ! -s "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair \
+              -keystore "$HOME/.android/debug.keystore" \
+              -storepass android \
+              -keypass android \
+              -alias androiddebugkey \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=BatteryStepNotifier Debug, OU=Personal, O=zhuchenyu2008, C=CN"
+          fi
+          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey
+
       - name: Build and lint
         run: gradle -p battery-step-notifier :app:assembleDebug :app:lintDebug --stacktrace
 
@@ -60,15 +76,16 @@ jobs:
           apkanalyzer manifest application-id "$APK"
           apkanalyzer manifest version-name "$APK"
           unzip -l "$APK" | grep -q 'classes.dex'
+          apksigner verify --verbose "$APK"
           sha256sum "$APK" | tee SHA256SUMS.txt
-          cp "$APK" BatteryStepNotifier-v3.apk
+          cp "$APK" BatteryStepNotifier-v4.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: BatteryStepNotifier-v3
+          name: BatteryStepNotifier-v4
           path: |
-            BatteryStepNotifier-v3.apk
+            BatteryStepNotifier-v4.apk
             SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30
