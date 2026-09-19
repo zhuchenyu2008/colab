@@ -22,6 +22,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.PowerManager;
 
 import java.lang.reflect.Method;
 import java.util.List;
@@ -32,6 +33,10 @@ public class BatteryMonitorService extends Service {
     private static final String CHANNEL_ALERT = "battery_alert";
     private static final int MONITOR_ID = 1001;
     private static final int ALERT_BASE = 2000;
+    private static final long POLL_INTERVAL_MS = 30_000L;
+    private static final long WAKE_LOCK_TIMEOUT_MS = 120_000L;
+
+    private final Handler handler = new Handler(Looper.getMainLooper());
 
     private boolean receiverRegistered;
     private boolean charging;
@@ -41,6 +46,14 @@ public class BatteryMonitorService extends Service {
     private int sessionStart = -1;
     private int nextTarget = -1;
     private int step = 1;
+    private PowerManager.WakeLock wakeLock;
+
+    private final Runnable batteryPollRunnable = new Runnable() {
+        @Override
+        public void run() {
+            pollBatterySnapshot();
+        }
+    };
 
     private final BroadcastReceiver systemReceiver = new BroadcastReceiver() {
         @Override
@@ -50,11 +63,15 @@ public class BatteryMonitorService extends Service {
                 handleBatteryChanged(intent);
             } else if (Intent.ACTION_POWER_CONNECTED.equals(action)) {
                 charging = true;
-                if (monitoringAllowed() && currentLevel >= 0) beginSession(currentLevel);
-                updateForeground();
+                pollBatterySnapshot();
             } else if (Intent.ACTION_POWER_DISCONNECTED.equals(action)) {
                 charging = false;
                 clearSessionTargets();
+                syncReliabilityLoop();
+                updateForeground();
+            } else if (Intent.ACTION_SCREEN_OFF.equals(action)
+                    || Intent.ACTION_SCREEN_ON.equals(action)) {
+                syncReliabilityLoop();
                 updateForeground();
             } else if (BluetoothDevice.ACTION_ACL_CONNECTED.equals(action)
                     || BluetoothDevice.ACTION_ACL_DISCONNECTED.equals(action)) {
@@ -73,6 +90,7 @@ public class BatteryMonitorService extends Service {
                     || NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED.equals(action)
                     || NotificationManager.ACTION_NOTIFICATION_POLICY_ACCESS_GRANTED_CHANGED.equals(action)) {
                 updateQuietPauseState();
+                syncReliabilityLoop();
                 updateForeground();
             }
         }
@@ -118,18 +136,19 @@ public class BatteryMonitorService extends Service {
     public void onCreate() {
         super.onCreate();
         createChannels();
+        createWakeLock();
         step = Prefs.getStep(this);
         quietPaused = isQuietModeBlocking();
         startInForeground();
         registerSystemReceiver();
         checkSelectedDeviceNow();
+        pollBatterySnapshot();
 
-        // Bluetooth may still be restoring profile state just after the service starts.
-        // One delayed retry keeps this event-driven while fixing startup races.
-        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+        // Bluetooth profile state can lag slightly behind service startup.
+        handler.postDelayed(() -> {
             if (Prefs.isBluetoothAutoEnabled(this)) {
                 checkSelectedDeviceNow();
-                updateForeground();
+                pollBatterySnapshot();
             }
         }, 1500L);
     }
@@ -151,12 +170,14 @@ public class BatteryMonitorService extends Service {
         if (Prefs.isBluetoothAutoEnabled(this)) {
             checkSelectedDeviceNow();
         }
-        updateForeground();
+        pollBatterySnapshot();
         return START_STICKY;
     }
 
     @Override
     public void onDestroy() {
+        handler.removeCallbacksAndMessages(null);
+        releaseWakeLock();
         if (receiverRegistered) {
             try {
                 unregisterReceiver(systemReceiver);
@@ -172,11 +193,24 @@ public class BatteryMonitorService extends Service {
         return null;
     }
 
+    private void createWakeLock() {
+        PowerManager power = (PowerManager) getSystemService(Context.POWER_SERVICE);
+        if (power != null) {
+            wakeLock = power.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK,
+                    getPackageName() + ":charging_monitor"
+            );
+            wakeLock.setReferenceCounted(false);
+        }
+    }
+
     private void registerSystemReceiver() {
         IntentFilter filter = new IntentFilter();
         filter.addAction(Intent.ACTION_BATTERY_CHANGED);
         filter.addAction(Intent.ACTION_POWER_CONNECTED);
         filter.addAction(Intent.ACTION_POWER_DISCONNECTED);
+        filter.addAction(Intent.ACTION_SCREEN_OFF);
+        filter.addAction(Intent.ACTION_SCREEN_ON);
         filter.addAction(BluetoothDevice.ACTION_ACL_CONNECTED);
         filter.addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED);
         filter.addAction(BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED);
@@ -196,10 +230,39 @@ public class BatteryMonitorService extends Service {
         }
     }
 
+    private void pollBatterySnapshot() {
+        if (!Prefs.shouldKeepServiceRunning(this)) {
+            syncReliabilityLoop();
+            return;
+        }
+
+        try {
+            IntentFilter filter = new IntentFilter(Intent.ACTION_BATTERY_CHANGED);
+            Intent sticky;
+            if (Build.VERSION.SDK_INT >= 33) {
+                sticky = registerReceiver(null, filter, Context.RECEIVER_EXPORTED);
+            } else {
+                sticky = registerReceiver(null, filter);
+            }
+            if (sticky != null) {
+                handleBatteryChanged(sticky);
+                return;
+            }
+        } catch (RuntimeException ignored) {
+        }
+
+        // If a vendor does not return the sticky intent, keep the loop alive and retry later.
+        syncReliabilityLoop();
+        updateForeground();
+    }
+
     private void handleBatteryChanged(Intent intent) {
         int raw = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
         int scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100);
-        if (raw < 0 || scale <= 0) return;
+        if (raw < 0 || scale <= 0) {
+            syncReliabilityLoop();
+            return;
+        }
 
         int level = Math.round(raw * 100f / scale);
         int status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN);
@@ -233,7 +296,52 @@ public class BatteryMonitorService extends Service {
                 if (nextTarget > 100) nextTarget = -1;
             }
         }
+
+        syncReliabilityLoop();
         updateForeground();
+    }
+
+    private void syncReliabilityLoop() {
+        handler.removeCallbacks(batteryPollRunnable);
+
+        boolean shouldPoll = charging && monitoringAllowed();
+        if (!shouldPoll) {
+            releaseWakeLock();
+            return;
+        }
+
+        PowerManager power = (PowerManager) getSystemService(Context.POWER_SERVICE);
+        boolean screenOff = power != null && !power.isInteractive();
+        if (screenOff) {
+            refreshWakeLock();
+        } else {
+            releaseWakeLock();
+        }
+
+        handler.postDelayed(batteryPollRunnable, POLL_INTERVAL_MS);
+    }
+
+    private void refreshWakeLock() {
+        if (wakeLock == null) return;
+        try {
+            if (wakeLock.isHeld()) {
+                wakeLock.release();
+            }
+            wakeLock.acquire(WAKE_LOCK_TIMEOUT_MS);
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    private void releaseWakeLock() {
+        if (wakeLock == null) return;
+        try {
+            if (wakeLock.isHeld()) wakeLock.release();
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    private boolean isWakeLockHeld() {
+        return wakeLock != null && wakeLock.isHeld();
     }
 
     private void handleBluetoothEvent(Intent intent, boolean connected) {
@@ -259,6 +367,7 @@ public class BatteryMonitorService extends Service {
             Prefs.setEnabled(this, false);
             clearSessionTargets();
         }
+        syncReliabilityLoop();
         updateForeground();
     }
 
@@ -294,6 +403,7 @@ public class BatteryMonitorService extends Service {
             }
             clearSessionTargets();
         }
+        syncReliabilityLoop();
     }
 
     private boolean isDeviceConnected(String address) {
@@ -309,9 +419,6 @@ public class BatteryMonitorService extends Service {
             if (adapter == null || !adapter.isEnabled()) return false;
             BluetoothDevice target = adapter.getRemoteDevice(address);
 
-            // AOSP exposes a hidden/SystemApi BluetoothDevice.isConnected() with no arguments.
-            // It reports whether any ACL connection to this exact device is open, which matches
-            // the system Bluetooth UI much better than checking GATT alone.
             try {
                 Method method = BluetoothDevice.class.getMethod("isConnected");
                 Object connected = method.invoke(target);
@@ -319,7 +426,6 @@ public class BatteryMonitorService extends Service {
             } catch (Exception ignored) {
             }
 
-            // Keep a vendor-compatibility fallback in case an OEM provides a transport overload.
             try {
                 Method method = BluetoothDevice.class.getMethod("isConnected", int.class);
                 Object bredr = method.invoke(target, BluetoothDevice.TRANSPORT_BREDR);
@@ -328,7 +434,6 @@ public class BatteryMonitorService extends Service {
             } catch (Exception ignored) {
             }
 
-            // Public API fallback for devices represented as a GATT connection.
             try {
                 if (Build.VERSION.SDK_INT >= 31
                         && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)
@@ -437,10 +542,12 @@ public class BatteryMonitorService extends Service {
             text = "恢复普通响铃后会自动继续";
         } else if (charging && currentLevel >= 0 && nextTarget > 0) {
             title = "正在监测充电电量";
-            text = "当前 " + currentLevel + "% · 下次 " + nextTarget + "% 提醒";
+            text = "当前 " + currentLevel + "% · 下次 " + nextTarget + "% 提醒"
+                    + (isWakeLockHeld() ? " · 锁屏可靠监测" : "");
         } else if (charging) {
             title = "正在监测充电电量";
-            text = "当前 " + currentLevel + "% · 暂无下一档提醒";
+            text = "当前 " + currentLevel + "% · 暂无下一档提醒"
+                    + (isWakeLockHeld() ? " · 锁屏可靠监测" : "");
         } else {
             title = "电量提醒已待机";
             text = "未充电 · 插电后自动开始监测";
