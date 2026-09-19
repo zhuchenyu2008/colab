@@ -19,7 +19,9 @@ import android.content.pm.ServiceInfo;
 import android.media.AudioManager;
 import android.os.BatteryManager;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 
 import java.lang.reflect.Method;
 import java.util.List;
@@ -57,6 +59,16 @@ public class BatteryMonitorService extends Service {
             } else if (BluetoothDevice.ACTION_ACL_CONNECTED.equals(action)
                     || BluetoothDevice.ACTION_ACL_DISCONNECTED.equals(action)) {
                 handleBluetoothEvent(intent, BluetoothDevice.ACTION_ACL_CONNECTED.equals(action));
+            } else if (BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED.equals(action)) {
+                int state = intent.getIntExtra(
+                        BluetoothAdapter.EXTRA_CONNECTION_STATE,
+                        BluetoothAdapter.STATE_DISCONNECTED
+                );
+                if (state == BluetoothAdapter.STATE_CONNECTED) {
+                    handleBluetoothEvent(intent, true);
+                } else if (state == BluetoothAdapter.STATE_DISCONNECTED) {
+                    handleBluetoothEvent(intent, false);
+                }
             } else if (AudioManager.RINGER_MODE_CHANGED_ACTION.equals(action)
                     || NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED.equals(action)
                     || NotificationManager.ACTION_NOTIFICATION_POLICY_ACCESS_GRANTED_CHANGED.equals(action)) {
@@ -111,6 +123,15 @@ public class BatteryMonitorService extends Service {
         startInForeground();
         registerSystemReceiver();
         checkSelectedDeviceNow();
+
+        // Bluetooth may still be restoring profile state just after the service starts.
+        // One delayed retry keeps this event-driven while fixing startup races.
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            if (Prefs.isBluetoothAutoEnabled(this)) {
+                checkSelectedDeviceNow();
+                updateForeground();
+            }
+        }, 1500L);
     }
 
     @Override
@@ -158,6 +179,7 @@ public class BatteryMonitorService extends Service {
         filter.addAction(Intent.ACTION_POWER_DISCONNECTED);
         filter.addAction(BluetoothDevice.ACTION_ACL_CONNECTED);
         filter.addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED);
+        filter.addAction(BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED);
         filter.addAction(AudioManager.RINGER_MODE_CHANGED_ACTION);
         filter.addAction(NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED);
         filter.addAction(NotificationManager.ACTION_NOTIFICATION_POLICY_ACCESS_GRANTED_CHANGED);
@@ -287,6 +309,17 @@ public class BatteryMonitorService extends Service {
             if (adapter == null || !adapter.isEnabled()) return false;
             BluetoothDevice target = adapter.getRemoteDevice(address);
 
+            // AOSP exposes a hidden/SystemApi BluetoothDevice.isConnected() with no arguments.
+            // It reports whether any ACL connection to this exact device is open, which matches
+            // the system Bluetooth UI much better than checking GATT alone.
+            try {
+                Method method = BluetoothDevice.class.getMethod("isConnected");
+                Object connected = method.invoke(target);
+                if (Boolean.TRUE.equals(connected)) return true;
+            } catch (Exception ignored) {
+            }
+
+            // Keep a vendor-compatibility fallback in case an OEM provides a transport overload.
             try {
                 Method method = BluetoothDevice.class.getMethod("isConnected", int.class);
                 Object bredr = method.invoke(target, BluetoothDevice.TRANSPORT_BREDR);
@@ -295,7 +328,13 @@ public class BatteryMonitorService extends Service {
             } catch (Exception ignored) {
             }
 
+            // Public API fallback for devices represented as a GATT connection.
             try {
+                if (Build.VERSION.SDK_INT >= 31
+                        && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)
+                        != PackageManager.PERMISSION_GRANTED) {
+                    return false;
+                }
                 List<BluetoothDevice> gatt = manager.getConnectedDevices(BluetoothProfile.GATT);
                 for (BluetoothDevice device : gatt) {
                     if (address.equalsIgnoreCase(device.getAddress())) return true;
