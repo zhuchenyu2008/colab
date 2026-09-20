@@ -4,6 +4,7 @@
     android:layout_height="match_parent"
     android:fillViewport="true"
     android:clipToPadding="false"
+    android:fitsSystemWindows="true"
     android:background="@color/page_bg">
 
     <LinearLayout
@@ -246,7 +247,6 @@
             android:padding="20dp">
 
             <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="后台可靠性" android:textColor="@color/text_primary" android:textSize="18sp" android:textStyle="bold" />
-
             <Button android:id="@+id/notificationButton" android:layout_width="match_parent" android:layout_height="48dp" android:layout_marginTop="14dp" android:background="@drawable/bg_action_button" android:text="通知权限" android:textAllCaps="false" android:textColor="@color/text_primary" />
             <Button android:id="@+id/batteryOptimizationButton" android:layout_width="match_parent" android:layout_height="48dp" android:layout_marginTop="10dp" android:background="@drawable/bg_action_button" android:text="电池优化" android:textAllCaps="false" android:textColor="@color/text_primary" />
             <Button android:id="@+id/autoStartButton" android:layout_width="match_parent" android:layout_height="48dp" android:layout_marginTop="10dp" android:background="@drawable/bg_action_button" android:text="自启动管理" android:textAllCaps="false" android:textColor="@color/text_primary" />
