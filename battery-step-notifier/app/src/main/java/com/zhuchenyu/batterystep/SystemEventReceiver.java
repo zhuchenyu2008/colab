@@ -13,9 +13,13 @@ public class SystemEventReceiver extends BroadcastReceiver {
     public void onReceive(Context context, Intent intent) {
         String action = intent.getAction();
 
-        if (Intent.ACTION_POWER_CONNECTED.equals(action)
-                || Intent.ACTION_POWER_DISCONNECTED.equals(action)) {
-            BatteryMonitorService.applyConfig(context);
+        if (Intent.ACTION_POWER_CONNECTED.equals(action)) {
+            ReliableBatteryMonitorService.handleExternalPowerEvent(context, true);
+            return;
+        }
+
+        if (Intent.ACTION_POWER_DISCONNECTED.equals(action)) {
+            ReliableBatteryMonitorService.handleExternalPowerEvent(context, false);
             return;
         }
 
