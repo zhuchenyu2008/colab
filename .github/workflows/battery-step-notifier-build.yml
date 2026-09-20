@@ -9,6 +9,10 @@ on:
       - '.github/workflows/battery-step-notifier-build.yml'
   workflow_dispatch:
 
+concurrency:
+  group: battery-step-notifier-build
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -19,6 +23,7 @@ jobs:
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      EXPECTED_SIGNING_SHA256: 5b8727a90c908530776fe8a928c56700e095606d71f42c0df58aacf078d87965
 
     steps:
       - name: Checkout
@@ -44,48 +49,47 @@ jobs:
         with:
           gradle-version: '8.13'
 
-      - name: Restore stable debug signing key
+      - name: Restore stable signing key
         uses: actions/cache@v4
         with:
           path: ~/.android/debug.keystore
           key: battery-step-notifier-debug-keystore-v1
 
-      - name: Ensure stable debug signing key
+      - name: Verify stable signing key
         run: |
-          mkdir -p "$HOME/.android"
-          if [ ! -s "$HOME/.android/debug.keystore" ]; then
-            keytool -genkeypair \
-              -keystore "$HOME/.android/debug.keystore" \
-              -storepass android \
-              -keypass android \
-              -alias androiddebugkey \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=BatteryStepNotifier Debug, OU=Personal, O=zhuchenyu2008, C=CN"
-          fi
-          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey
+          test -s "$HOME/.android/debug.keystore"
+          keytool -list -v \
+            -keystore "$HOME/.android/debug.keystore" \
+            -storepass android \
+            -alias androiddebugkey | tee KEYSTORE_CERT.txt
+          KEYSTORE_SHA=$(sed -n 's/.*SHA256: //p' KEYSTORE_CERT.txt | head -1 | tr -d ':' | tr '[:upper:]' '[:lower:]')
+          echo "Keystore SHA-256: $KEYSTORE_SHA"
+          test "$KEYSTORE_SHA" = "$EXPECTED_SIGNING_SHA256"
 
       - name: Build and lint
         run: gradle -p battery-step-notifier :app:assembleDebug :app:lintDebug --stacktrace
 
-      - name: Validate APK
+      - name: Validate APK and signing certificate
         run: |
           APK=battery-step-notifier/app/build/outputs/apk/debug/app-debug.apk
           test -s "$APK"
           apkanalyzer manifest application-id "$APK"
           apkanalyzer manifest version-name "$APK"
           unzip -l "$APK" | grep -q 'classes.dex'
-          apksigner verify --verbose "$APK"
+          apksigner verify --verbose --print-certs "$APK" | tee SIGNING_CERT.txt
+          APK_SIGNING_SHA=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' SIGNING_CERT.txt | head -1 | tr '[:upper:]' '[:lower:]')
+          echo "APK signing SHA-256: $APK_SIGNING_SHA"
+          test "$APK_SIGNING_SHA" = "$EXPECTED_SIGNING_SHA256"
           sha256sum "$APK" | tee SHA256SUMS.txt
-          cp "$APK" BatteryStepNotifier-v13.apk
+          cp "$APK" BatteryStepNotifier-v14.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: BatteryStepNotifier-v13
+          name: BatteryStepNotifier-v14
           path: |
-            BatteryStepNotifier-v13.apk
+            BatteryStepNotifier-v14.apk
             SHA256SUMS.txt
+            SIGNING_CERT.txt
           if-no-files-found: error
           retention-days: 30
