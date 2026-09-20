@@ -5,28 +5,28 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- 极简电池轮廓 -->
+    <!-- Battery body: kept well inside the adaptive-icon safe zone. -->
     <path
-        android:pathData="M24,29 H75 C80,29 84,33 84,38 V70 C84,75 80,79 75,79 H24 C19,79 15,75 15,70 V38 C15,33 19,29 24,29 Z"
+        android:pathData="M31,36 H70 C74,36 77,39 77,43 V65 C77,69 74,72 70,72 H31 C27,72 24,69 24,65 V43 C24,39 27,36 31,36 Z"
         android:fillColor="@android:color/transparent"
         android:strokeColor="#FF000000"
-        android:strokeWidth="7"
+        android:strokeWidth="5.2"
         android:strokeLineCap="round"
         android:strokeLineJoin="round" />
 
-    <!-- 电池凸起 -->
+    <!-- Battery terminal. -->
     <path
-        android:pathData="M84,43 H90 C93,43 95,45 95,48 V60 C95,63 93,65 90,65 H84 Z"
+        android:pathData="M77,46 H81 C84,46 85,48 85,50 V58 C85,60 84,62 81,62 H77 Z"
         android:fillColor="#FF000000" />
 
-    <!-- 三级电量阶梯 -->
+    <!-- Three rising battery-step bars. -->
     <path
-        android:pathData="M27,62 H39 V69 H27 Z"
+        android:pathData="M32,59 H41 V65 H32 Z"
         android:fillColor="#FF000000" />
     <path
-        android:pathData="M44,54 H57 V69 H44 Z"
+        android:pathData="M46,52 H55 V65 H46 Z"
         android:fillColor="#FF000000" />
     <path
-        android:pathData="M62,44 H76 V69 H62 Z"
+        android:pathData="M60,44 H70 V65 H60 Z"
         android:fillColor="#FF000000" />
 </vector>
