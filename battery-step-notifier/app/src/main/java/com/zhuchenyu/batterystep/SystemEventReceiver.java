@@ -1,6 +1,7 @@
 package com.zhuchenyu.batterystep;
 
 import android.Manifest;
+import android.app.AlarmManager;
 import android.bluetooth.BluetoothDevice;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -12,6 +13,10 @@ public class SystemEventReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
         String action = intent.getAction();
+        if (AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED.equals(action)) {
+            AlarmMonitor.applyConfig(context);
+            return;
+        }
         if (Intent.ACTION_POWER_CONNECTED.equals(action)) {
             AlarmMonitor.clearSession(context);
             if (Prefs.isEnabled(context)) AlarmMonitor.schedule(context, 1000L);
