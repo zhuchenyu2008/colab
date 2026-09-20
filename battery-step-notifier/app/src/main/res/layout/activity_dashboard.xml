@@ -1,0 +1,286 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true"
+    android:clipToPadding="false"
+    android:background="@color/page_bg">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingLeft="18dp"
+        android:paddingTop="18dp"
+        android:paddingRight="18dp"
+        android:paddingBottom="32dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="电量阶梯提醒"
+                    android:textColor="@color/text_primary"
+                    android:textSize="28sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="安静待机，到点提醒"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="14sp" />
+            </LinearLayout>
+
+            <Switch
+                android:id="@+id/enabledSwitch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:showText="false" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/heroStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:background="@drawable/bg_status_off"
+            android:text="已关闭"
+            android:textColor="@color/status_off"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:padding="20dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="提醒设置"
+                android:textColor="@color/text_secondary"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="每提升"
+                android:textColor="@color/text_secondary"
+                android:textSize="15sp" />
+
+            <TextView
+                android:id="@+id/stepText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="1%"
+                android:textColor="@color/text_primary"
+                android:textSize="48sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="提醒一次"
+                android:textColor="@color/text_secondary"
+                android:textSize="15sp" />
+
+            <SeekBar
+                android:id="@+id/stepSeek"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:max="19" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="1%" android:textColor="@color/text_secondary" android:textSize="12sp" />
+                <Space android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="20%" android:textColor="@color/text_secondary" android:textSize="12sp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:padding="20dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="自动化"
+                android:textColor="@color/text_primary"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="手表蓝牙联动" android:textColor="@color/text_primary" android:textSize="16sp" />
+                    <TextView android:id="@+id/bluetoothSummary" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="3dp" android:text="未选择设备" android:textColor="@color/text_secondary" android:textSize="13sp" />
+                </LinearLayout>
+                <Switch android:id="@+id/bluetoothSwitch" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+            </LinearLayout>
+
+            <Button
+                android:id="@+id/bluetoothButton"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="10dp"
+                android:background="@drawable/bg_action_button"
+                android:text="选择联动设备"
+                android:textAllCaps="false"
+                android:textColor="@color/text_primary" />
+
+            <View android:layout_width="match_parent" android:layout_height="1dp" android:layout_marginTop="16dp" android:background="@color/divider" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="静音 / 勿扰时暂停" android:textColor="@color/text_primary" android:textSize="16sp" />
+                    <TextView android:id="@+id/quietSummary" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="3dp" android:text="恢复响铃后自动继续" android:textColor="@color/text_secondary" android:textSize="13sp" />
+                </LinearLayout>
+                <Switch android:id="@+id/quietSwitch" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+            </LinearLayout>
+
+            <Button
+                android:id="@+id/dndButton"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="10dp"
+                android:background="@drawable/bg_action_button"
+                android:text="免打扰权限"
+                android:textAllCaps="false"
+                android:textColor="@color/text_primary" />
+
+            <View android:layout_width="match_parent" android:layout_height="1dp" android:layout_marginTop="16dp" android:background="@color/divider" />
+
+            <Switch
+                android:id="@+id/hideRecentsSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="在最近任务页面隐藏"
+                android:textColor="@color/text_primary"
+                android:textSize="16sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:padding="20dp">
+
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="运行状态" android:textColor="@color/text_primary" android:textSize="18sp" android:textStyle="bold" />
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="16dp" android:orientation="horizontal">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="当前电量" android:textColor="@color/text_secondary" android:textSize="14sp" />
+                <TextView android:id="@+id/batteryValue" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="--" android:textColor="@color/text_primary" android:textSize="15sp" android:textStyle="bold" />
+            </LinearLayout>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:orientation="horizontal">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="充电状态" android:textColor="@color/text_secondary" android:textSize="14sp" />
+                <TextView android:id="@+id/chargingValue" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="--" android:textColor="@color/text_primary" android:textSize="15sp" />
+            </LinearLayout>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:orientation="horizontal">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="提醒间隔" android:textColor="@color/text_secondary" android:textSize="14sp" />
+                <TextView android:id="@+id/reminderIntervalValue" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="--" android:textColor="@color/text_primary" android:textSize="15sp" />
+            </LinearLayout>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:orientation="horizontal">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="下次提醒" android:textColor="@color/text_secondary" android:textSize="14sp" />
+                <TextView android:id="@+id/nextReminderValue" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="--" android:textColor="@color/text_primary" android:textSize="15sp" />
+            </LinearLayout>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:orientation="horizontal">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="监测服务" android:textColor="@color/text_secondary" android:textSize="14sp" />
+                <TextView android:id="@+id/serviceValue" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="--" android:textColor="@color/text_primary" android:textSize="15sp" />
+            </LinearLayout>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:orientation="horizontal">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="蓝牙联动" android:textColor="@color/text_secondary" android:textSize="14sp" />
+                <TextView android:id="@+id/bluetoothValue" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="--" android:textColor="@color/text_primary" android:textSize="15sp" />
+            </LinearLayout>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:orientation="horizontal">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="静音暂停" android:textColor="@color/text_secondary" android:textSize="14sp" />
+                <TextView android:id="@+id/quietValue" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="--" android:textColor="@color/text_primary" android:textSize="15sp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:padding="20dp">
+
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="后台可靠性" android:textColor="@color/text_primary" android:textSize="18sp" android:textStyle="bold" />
+
+            <Button android:id="@+id/notificationButton" android:layout_width="match_parent" android:layout_height="48dp" android:layout_marginTop="14dp" android:background="@drawable/bg_action_button" android:text="通知权限" android:textAllCaps="false" android:textColor="@color/text_primary" />
+            <Button android:id="@+id/batteryOptimizationButton" android:layout_width="match_parent" android:layout_height="48dp" android:layout_marginTop="10dp" android:background="@drawable/bg_action_button" android:text="电池优化" android:textAllCaps="false" android:textColor="@color/text_primary" />
+            <Button android:id="@+id/autoStartButton" android:layout_width="match_parent" android:layout_height="48dp" android:layout_marginTop="10dp" android:background="@drawable/bg_action_button" android:text="自启动管理" android:textAllCaps="false" android:textColor="@color/text_primary" />
+            <TextView android:id="@+id/autoStartHint" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:text="自启动状态无法由 Android 统一读取，请在系统页面确认已允许。" android:textColor="@color/text_secondary" android:textSize="12sp" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/testNotificationButton"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:layout_marginTop="14dp"
+            android:background="@drawable/bg_action_button"
+            android:text="发送测试通知"
+            android:textAllCaps="false"
+            android:textColor="@color/text_primary" />
+
+        <Button
+            android:id="@+id/appSettingsButton"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:layout_marginTop="10dp"
+            android:background="@drawable/bg_action_button"
+            android:text="打开应用系统设置"
+            android:textAllCaps="false"
+            android:textColor="@color/text_primary" />
+
+        <TextView
+            android:id="@+id/footerVersion"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:gravity="center"
+            android:text="版本 1.0.15"
+            android:textColor="@color/text_secondary"
+            android:textSize="12sp" />
+    </LinearLayout>
+</ScrollView>
