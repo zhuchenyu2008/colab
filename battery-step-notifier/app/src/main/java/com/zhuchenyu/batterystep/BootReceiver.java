@@ -9,7 +9,6 @@ public class BootReceiver extends BroadcastReceiver {
     public void onReceive(Context context, Intent intent) {
         if (Prefs.shouldKeepServiceRunning(context)) {
             BatteryMonitorService.start(context);
-            AlarmMonitor.applyConfig(context);
         }
     }
 }
