@@ -28,6 +28,10 @@
         </activity>
 
         <activity
+            android:name=".BackgroundLogActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".MainActivity"
             android:exported="false" />
 
@@ -38,7 +42,7 @@
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Directly reads charging percentage using BatteryManager in a user-enabled foreground charging reminder, plus Bluetooth and quiet-mode automation." />
+                android:value="Reads battery percentage once per minute in a user-enabled foreground charging reminder, plus Bluetooth and quiet-mode automation." />
         </service>
 
         <receiver
@@ -57,8 +61,6 @@
             android:enabled="true"
             android:exported="true">
             <intent-filter>
-                <action android:name="android.intent.action.ACTION_POWER_CONNECTED" />
-                <action android:name="android.intent.action.ACTION_POWER_DISCONNECTED" />
                 <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
                 <action android:name="android.bluetooth.device.action.ACL_DISCONNECTED" />
             </intent-filter>
