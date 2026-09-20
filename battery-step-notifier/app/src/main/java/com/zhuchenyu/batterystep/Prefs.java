@@ -12,6 +12,10 @@ public final class Prefs {
     private static final String KEY_BT_ADDRESS = "bt_address";
     private static final String KEY_BT_NAME = "bt_name";
     private static final String KEY_PAUSE_QUIET = "pause_quiet";
+    private static final String KEY_RUNTIME_LEVEL = "runtime_level";
+    private static final String KEY_RUNTIME_CHARGING = "runtime_charging";
+    private static final String KEY_RUNTIME_NEXT_TARGET = "runtime_next_target";
+    private static final String KEY_RUNTIME_UPDATED_AT = "runtime_updated_at";
 
     private Prefs() {}
 
@@ -76,5 +80,30 @@ public final class Prefs {
 
     public static boolean shouldKeepServiceRunning(Context context) {
         return isEnabled(context) || isBluetoothAutoEnabled(context);
+    }
+
+    public static void setRuntimeState(Context context, int level, boolean charging, int nextTarget) {
+        prefs(context).edit()
+                .putInt(KEY_RUNTIME_LEVEL, level)
+                .putBoolean(KEY_RUNTIME_CHARGING, charging)
+                .putInt(KEY_RUNTIME_NEXT_TARGET, nextTarget)
+                .putLong(KEY_RUNTIME_UPDATED_AT, System.currentTimeMillis())
+                .apply();
+    }
+
+    public static int getRuntimeLevel(Context context) {
+        return prefs(context).getInt(KEY_RUNTIME_LEVEL, -1);
+    }
+
+    public static boolean getRuntimeCharging(Context context) {
+        return prefs(context).getBoolean(KEY_RUNTIME_CHARGING, false);
+    }
+
+    public static int getRuntimeNextTarget(Context context) {
+        return prefs(context).getInt(KEY_RUNTIME_NEXT_TARGET, -1);
+    }
+
+    public static long getRuntimeUpdatedAt(Context context) {
+        return prefs(context).getLong(KEY_RUNTIME_UPDATED_AT, 0L);
     }
 }
