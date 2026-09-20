@@ -79,7 +79,7 @@ public final class Prefs {
     }
 
     public static boolean shouldKeepServiceRunning(Context context) {
-        return isEnabled(context) || isBluetoothAutoEnabled(context);
+        return isEnabled(context);
     }
 
     public static void setRuntimeState(Context context, int level, boolean charging, int nextTarget) {
