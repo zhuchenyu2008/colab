@@ -81,14 +81,14 @@ jobs:
           echo "APK signing SHA-256: $APK_SIGNING_SHA"
           test "$APK_SIGNING_SHA" = "$EXPECTED_SIGNING_SHA256"
           sha256sum "$APK" | tee SHA256SUMS.txt
-          cp "$APK" BatteryStepNotifier-v16.apk
+          cp "$APK" BatteryStepNotifier-v17.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: BatteryStepNotifier-v16
+          name: BatteryStepNotifier-v17
           path: |
-            BatteryStepNotifier-v16.apk
+            BatteryStepNotifier-v17.apk
             SHA256SUMS.txt
             SIGNING_CERT.txt
           if-no-files-found: error
