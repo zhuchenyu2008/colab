@@ -11,16 +11,14 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.media.AudioManager;
 import android.net.Uri;
 import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.PowerManager;
 import android.provider.Settings;
-import android.view.ViewGroup;
 import android.widget.Button;
-import android.widget.LinearLayout;
-import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.Switch;
 import android.widget.TextView;
@@ -40,17 +38,32 @@ public class DashboardActivity extends Activity {
     private Switch quietSwitch;
     private SeekBar stepSeek;
     private TextView stepText;
-    private TextView statusText;
+    private TextView heroStatus;
+    private TextView bluetoothSummary;
+    private TextView quietSummary;
+    private TextView batteryValue;
+    private TextView chargingValue;
+    private TextView reminderIntervalValue;
+    private TextView nextReminderValue;
+    private TextView serviceValue;
+    private TextView bluetoothValue;
+    private TextView quietValue;
+    private TextView footerVersion;
     private Button bluetoothButton;
-    private Button batteryOptimizationButton;
     private Button dndButton;
+    private Button notificationButton;
+    private Button batteryOptimizationButton;
+    private Button autoStartButton;
+    private Button testNotificationButton;
+    private Button appSettingsButton;
     private boolean syncingUi;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setTitle("电量阶梯提醒");
-        setContentView(buildUi());
+        setContentView(R.layout.activity_dashboard);
+        bindViews();
+        setupListeners();
         bindState();
     }
 
@@ -62,47 +75,49 @@ public class DashboardActivity extends Activity {
         RecentsHelper.setExcluded(this, Prefs.hideFromRecents(this));
     }
 
-    private ScrollView buildUi() {
-        ScrollView scroll = new ScrollView(this);
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        int pad = dp(20);
-        root.setPadding(pad, pad, pad, pad);
-        scroll.addView(root, new ScrollView.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT));
+    private void bindViews() {
+        enabledSwitch = findViewById(R.id.enabledSwitch);
+        hideRecentsSwitch = findViewById(R.id.hideRecentsSwitch);
+        bluetoothSwitch = findViewById(R.id.bluetoothSwitch);
+        quietSwitch = findViewById(R.id.quietSwitch);
+        stepSeek = findViewById(R.id.stepSeek);
+        stepText = findViewById(R.id.stepText);
+        heroStatus = findViewById(R.id.heroStatus);
+        bluetoothSummary = findViewById(R.id.bluetoothSummary);
+        quietSummary = findViewById(R.id.quietSummary);
+        batteryValue = findViewById(R.id.batteryValue);
+        chargingValue = findViewById(R.id.chargingValue);
+        reminderIntervalValue = findViewById(R.id.reminderIntervalValue);
+        nextReminderValue = findViewById(R.id.nextReminderValue);
+        serviceValue = findViewById(R.id.serviceValue);
+        bluetoothValue = findViewById(R.id.bluetoothValue);
+        quietValue = findViewById(R.id.quietValue);
+        footerVersion = findViewById(R.id.footerVersion);
+        bluetoothButton = findViewById(R.id.bluetoothButton);
+        dndButton = findViewById(R.id.dndButton);
+        notificationButton = findViewById(R.id.notificationButton);
+        batteryOptimizationButton = findViewById(R.id.batteryOptimizationButton);
+        autoStartButton = findViewById(R.id.autoStartButton);
+        testNotificationButton = findViewById(R.id.testNotificationButton);
+        appSettingsButton = findViewById(R.id.appSettingsButton);
+    }
 
-        root.addView(text("电量阶梯提醒", 28), matchWrap());
-        root.addView(text(
-                "充电时按设定百分比提醒。v12 使用前台服务专用采样线程；充电监测期间每 5 秒直读一次系统电量，并保持 CPU 唤醒以减少锁屏调度延迟。\n",
-                14), matchWrap());
-
-        enabledSwitch = new Switch(this);
-        enabledSwitch.setText("总开关");
-        enabledSwitch.setTextSize(19);
-        enabledSwitch.setOnCheckedChangeListener((b, checked) -> {
+    private void setupListeners() {
+        enabledSwitch.setOnCheckedChangeListener((button, checked) -> {
             if (syncingUi) return;
             Prefs.setEnabled(this, checked);
             if (checked) requestNotificationPermission();
             BatteryMonitorService.applyConfig(this);
             renderStatus();
         });
-        root.addView(enabledSwitch, matchWrap());
 
-        hideRecentsSwitch = new Switch(this);
-        hideRecentsSwitch.setText("在最近任务页面隐藏");
-        hideRecentsSwitch.setOnCheckedChangeListener((b, checked) -> {
+        hideRecentsSwitch.setOnCheckedChangeListener((button, checked) -> {
             if (syncingUi) return;
             Prefs.setHideFromRecents(this, checked);
             RecentsHelper.setExcluded(this, checked);
         });
-        root.addView(hideRecentsSwitch, matchWrap());
 
-        root.addView(text("\n自动化", 20), matchWrap());
-
-        bluetoothSwitch = new Switch(this);
-        bluetoothSwitch.setText("指定手表连接=开启，断开=关闭");
-        bluetoothSwitch.setOnCheckedChangeListener((b, checked) -> {
+        bluetoothSwitch.setOnCheckedChangeListener((button, checked) -> {
             if (syncingUi) return;
             if (checked && !hasBluetoothPermission()) {
                 requestBluetoothPermission();
@@ -111,90 +126,57 @@ public class DashboardActivity extends Activity {
             Prefs.setBluetoothAutoEnabled(this, checked);
             if (checked && Prefs.getBluetoothAddress(this).isEmpty()) showBluetoothPicker();
             BatteryMonitorService.applyConfig(this);
-            renderStatus();
+            bindState();
         });
-        root.addView(bluetoothSwitch, matchWrap());
 
-        bluetoothButton = new Button(this);
-        bluetoothButton.setOnClickListener(v -> {
-            if (!hasBluetoothPermission()) requestBluetoothPermission();
-            else showBluetoothPicker();
-        });
-        root.addView(bluetoothButton, matchWrap());
-
-        quietSwitch = new Switch(this);
-        quietSwitch.setText("免打扰或静音时自动暂停");
-        quietSwitch.setOnCheckedChangeListener((b, checked) -> {
+        quietSwitch.setOnCheckedChangeListener((button, checked) -> {
             if (syncingUi) return;
             Prefs.setPauseOnQuietMode(this, checked);
             if (checked && !hasDndAccess()) openDndSettings();
             BatteryMonitorService.applyConfig(this);
-            renderStatus();
+            bindState();
         });
-        root.addView(quietSwitch, matchWrap());
 
-        dndButton = new Button(this);
-        dndButton.setOnClickListener(v -> openDndSettings());
-        root.addView(dndButton, matchWrap());
-
-        root.addView(text("\n提醒间隔", 20), matchWrap());
-        stepText = text("1%", 28);
-        root.addView(stepText, matchWrap());
-        stepSeek = new SeekBar(this);
-        stepSeek.setMax(19);
         stepSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 stepText.setText((progress + 1) + "%");
             }
+
             @Override public void onStartTrackingTouch(SeekBar seekBar) {}
-            @Override public void onStopTrackingTouch(SeekBar seekBar) {
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
                 int value = seekBar.getProgress() + 1;
                 Prefs.setStep(DashboardActivity.this, value);
                 BatteryMonitorService.applyConfig(DashboardActivity.this);
                 Toast.makeText(DashboardActivity.this,
                         "已保存：每提升 " + value + "% 提醒",
                         Toast.LENGTH_SHORT).show();
+                bindState();
             }
         });
-        root.addView(stepSeek, matchWrap());
 
-        root.addView(text("\n后台可靠性", 20), matchWrap());
-
-        Button autoStartButton = new Button(this);
-        autoStartButton.setText("打开自启动管理（OPPO / 一加）");
-        autoStartButton.setOnClickListener(v -> openAutoStartSettings());
-        root.addView(autoStartButton, matchWrap());
-        root.addView(text(
-                "请在系统页面手动允许“自启动/自动启动”。App 同时监听开机与解锁系统事件。\n",
-                12), matchWrap());
-
-        batteryOptimizationButton = new Button(this);
+        bluetoothButton.setOnClickListener(v -> {
+            if (!hasBluetoothPermission()) requestBluetoothPermission();
+            else showBluetoothPicker();
+        });
+        dndButton.setOnClickListener(v -> openDndSettings());
+        notificationButton.setOnClickListener(v -> {
+            if (hasNotificationPermission()) {
+                Toast.makeText(this, "通知权限已开启", Toast.LENGTH_SHORT).show();
+            } else {
+                requestNotificationPermission();
+            }
+        });
         batteryOptimizationButton.setOnClickListener(v -> requestIgnoreBatteryOptimizations());
-        root.addView(batteryOptimizationButton, matchWrap());
-
-        Button test = new Button(this);
-        test.setText("发送测试通知");
-        test.setOnClickListener(v -> {
+        autoStartButton.setOnClickListener(v -> openAutoStartSettings());
+        testNotificationButton.setOnClickListener(v -> {
             requestNotificationPermission();
             BatteryMonitorService.sendTestAlert(this);
             Toast.makeText(this, "已请求发送测试通知", Toast.LENGTH_SHORT).show();
         });
-        root.addView(test, matchWrap());
-
-        Button appSettings = new Button(this);
-        appSettings.setText("打开应用后台 / 电池详情");
-        appSettings.setOnClickListener(v -> openAppDetails());
-        root.addView(appSettings, matchWrap());
-
-        statusText = text("", 14);
-        statusText.setPadding(0, dp(18), 0, dp(18));
-        root.addView(statusText, matchWrap());
-
-        root.addView(text(
-                "说明：不使用系统闹钟。仅在“正在充电 + 总开关有效 + 非静音/DND暂停”时，每 5 秒直读 BatteryManager 并持续持有 partial wakelock；拔电、手表断开、关闭总开关或进入静音/DND后立即释放。",
-                12), matchWrap());
-
-        return scroll;
+        appSettingsButton.setOnClickListener(v -> openAppDetails());
     }
 
     private void bindState() {
@@ -207,33 +189,92 @@ public class DashboardActivity extends Activity {
         int step = Prefs.getStep(this);
         stepSeek.setProgress(step - 1);
         stepText.setText(step + "%");
-        bluetoothButton.setText("选择蓝牙设备 · " + Prefs.getBluetoothName(this));
-        dndButton.setText(hasDndAccess() ? "免打扰权限：已授权" : "免打扰权限：点此授权");
+        bluetoothSummary.setText(Prefs.isBluetoothAutoEnabled(this)
+                ? Prefs.getBluetoothName(this) + " · 连接开启 / 断开关闭"
+                : "未启用");
+        quietSummary.setText(Prefs.pauseOnQuietMode(this)
+                ? (hasDndAccess() ? "已启用 · 恢复响铃后自动继续" : "已启用 · 免打扰权限待授权")
+                : "未启用");
+        bluetoothButton.setText(Prefs.getBluetoothAddress(this).isEmpty()
+                ? "选择联动设备"
+                : "更换联动设备 · " + Prefs.getBluetoothName(this));
+        dndButton.setText(hasDndAccess() ? "免打扰权限 · 已授权" : "免打扰权限 · 需要授权");
+        notificationButton.setText(hasNotificationPermission()
+                ? "✓  通知权限已开启"
+                : "!  通知权限需开启");
         batteryOptimizationButton.setText(isIgnoringBatteryOptimizations()
-                ? "电池优化：已忽略（后台更可靠）"
-                : "电池优化：点此允许忽略");
+                ? "✓  电池优化已忽略"
+                : "!  电池优化需忽略");
+        autoStartButton.setText("自启动管理 · 请确认");
+        footerVersion.setText("版本 " + BuildConfig.VERSION_NAME + " · 电量阶梯提醒");
         syncingUi = false;
         renderStatus();
     }
 
     private void renderStatus() {
-        if (statusText == null) return;
         BatteryManager battery = getSystemService(BatteryManager.class);
         int level = battery == null ? -1
                 : battery.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY);
         boolean charging = battery != null && battery.isCharging();
-        StringBuilder s = new StringBuilder();
-        s.append(Prefs.isEnabled(this) ? "总开关：开启" : "总开关：关闭");
-        s.append(" · 系统直读电量：")
-                .append(level >= 0 && level <= 100 ? level + "%" : "未知");
-        s.append(charging ? " · 正在充电" : " · 未充电");
-        if (Prefs.isBluetoothAutoEnabled(this)) {
-            s.append(" · 联动设备：").append(Prefs.getBluetoothName(this));
+        boolean enabled = Prefs.isEnabled(this);
+        boolean quietBlocked = Prefs.pauseOnQuietMode(this) && isQuietModeNow();
+        int step = Prefs.getStep(this);
+
+        if (!enabled) {
+            setHero("已关闭", R.drawable.bg_status_off, R.color.status_off);
+        } else if (quietBlocked) {
+            setHero("已暂停 · 静音 / 勿扰", R.drawable.bg_status_warn, R.color.status_warn);
+        } else if (charging) {
+            String suffix = level >= 0 && level <= 100 ? " · " + level + "%" : "";
+            setHero("正在监测" + suffix + " · 充电中", R.drawable.bg_status_good, R.color.status_good);
+        } else {
+            String suffix = level >= 0 && level <= 100 ? " · " + level + "%" : "";
+            setHero("等待充电" + suffix, R.drawable.bg_status_warn, R.color.status_warn);
         }
-        if (!isIgnoringBatteryOptimizations()) {
-            s.append("\n⚠ 电池优化尚未忽略");
+
+        batteryValue.setText(level >= 0 && level <= 100 ? level + "%" : "未知");
+        chargingValue.setText(charging ? "正在充电" : "未充电");
+        reminderIntervalValue.setText(step + "%");
+
+        if (!enabled) {
+            nextReminderValue.setText("—");
+        } else if (quietBlocked) {
+            nextReminderValue.setText("暂停中");
+        } else if (!charging) {
+            nextReminderValue.setText("等待充电");
+        } else if (level >= 0 && level < 100) {
+            nextReminderValue.setText("预计 " + Math.min(100, level + step) + "%");
+        } else {
+            nextReminderValue.setText("—");
         }
-        statusText.setText(s.toString());
+
+        serviceValue.setText(Prefs.shouldKeepServiceRunning(this)
+                ? (enabled && charging && !quietBlocked ? "监测中" : "待机中")
+                : "已停止");
+        bluetoothValue.setText(Prefs.isBluetoothAutoEnabled(this)
+                ? Prefs.getBluetoothName(this)
+                : "未启用");
+        quietValue.setText(Prefs.pauseOnQuietMode(this)
+                ? (quietBlocked ? "已触发暂停" : "未触发")
+                : "未启用");
+    }
+
+    private void setHero(String text, int backgroundRes, int colorRes) {
+        heroStatus.setText(text);
+        heroStatus.setBackgroundResource(backgroundRes);
+        heroStatus.setTextColor(getColor(colorRes));
+    }
+
+    private boolean isQuietModeNow() {
+        AudioManager audio = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        if (audio != null && audio.getRingerMode() == AudioManager.RINGER_MODE_SILENT) return true;
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager != null && manager.isNotificationPolicyAccessGranted()) {
+            int filter = manager.getCurrentInterruptionFilter();
+            return filter != NotificationManager.INTERRUPTION_FILTER_ALL
+                    && filter != NotificationManager.INTERRUPTION_FILTER_UNKNOWN;
+        }
+        return false;
     }
 
     private void showBluetoothPicker() {
@@ -254,14 +295,14 @@ public class DashboardActivity extends Activity {
             devices.sort((a, b) -> safeName(a).compareToIgnoreCase(safeName(b)));
             String[] labels = new String[devices.size()];
             for (int i = 0; i < devices.size(); i++) {
-                BluetoothDevice d = devices.get(i);
-                labels[i] = safeName(d) + "\n" + d.getAddress();
+                BluetoothDevice device = devices.get(i);
+                labels[i] = safeName(device) + "\n" + device.getAddress();
             }
             new AlertDialog.Builder(this)
                     .setTitle("选择联动设备")
                     .setItems(labels, (dialog, which) -> {
-                        BluetoothDevice d = devices.get(which);
-                        Prefs.setBluetoothDevice(this, d.getAddress(), safeName(d));
+                        BluetoothDevice device = devices.get(which);
+                        Prefs.setBluetoothDevice(this, device.getAddress(), safeName(device));
                         Prefs.setBluetoothAutoEnabled(this, true);
                         BatteryMonitorService.applyConfig(this);
                         bindState();
@@ -294,10 +335,14 @@ public class DashboardActivity extends Activity {
         }
     }
 
+    private boolean hasNotificationPermission() {
+        return Build.VERSION.SDK_INT < 33
+                || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
     private void requestNotificationPermission() {
-        if (Build.VERSION.SDK_INT >= 33
-                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
-                != PackageManager.PERMISSION_GRANTED) {
+        if (!hasNotificationPermission() && Build.VERSION.SDK_INT >= 33) {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQ_NOTIFICATIONS);
         }
     }
@@ -313,12 +358,10 @@ public class DashboardActivity extends Activity {
                 showBluetoothPicker();
             } else {
                 Prefs.setBluetoothAutoEnabled(this, false);
-                Toast.makeText(this,
-                        "需要附近设备权限才能识别手表",
-                        Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "需要附近设备权限才能识别手表", Toast.LENGTH_LONG).show();
             }
-            bindState();
         }
+        bindState();
     }
 
     private void openAutoStartSettings() {
@@ -335,9 +378,7 @@ public class DashboardActivity extends Activity {
                 intent.setComponent(new ComponentName(candidate[0], candidate[1]));
                 if (getPackageManager().resolveActivity(intent, 0) != null) {
                     startActivity(intent);
-                    Toast.makeText(this,
-                            "请找到“电量阶梯提醒”并允许自启动",
-                            Toast.LENGTH_LONG).show();
+                    Toast.makeText(this, "请找到“电量阶梯提醒”并允许自启动", Toast.LENGTH_LONG).show();
                     return;
                 }
             } catch (Exception ignored) {
@@ -345,7 +386,7 @@ public class DashboardActivity extends Activity {
         }
         openAppDetails();
         Toast.makeText(this,
-                "系统未开放直达入口，请在应用详情/电池中寻找“自启动、自动启动或允许后台活动”",
+                "系统未开放直达入口，请在应用详情/电池中确认自启动和后台活动权限",
                 Toast.LENGTH_LONG).show();
     }
 
@@ -396,23 +437,5 @@ public class DashboardActivity extends Activity {
         } catch (Exception e) {
             startActivity(new Intent(Settings.ACTION_SETTINGS));
         }
-    }
-
-    private TextView text(String value, int size) {
-        TextView view = new TextView(this);
-        view.setText(value);
-        view.setTextSize(size);
-        return view;
-    }
-
-    private LinearLayout.LayoutParams matchWrap() {
-        return new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-    }
-
-    private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
     }
 }
