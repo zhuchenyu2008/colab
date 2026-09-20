@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="page_bg">#0F1114</color>
+    <color name="surface">#191C21</color>
+    <color name="surface_alt">#23272E</color>
+    <color name="text_primary">#F5F7FA</color>
+    <color name="text_secondary">#A7AEB9</color>
+    <color name="divider">#2D323A</color>
+    <color name="accent">#79A4FF</color>
+    <color name="status_good">#71D697</color>
+    <color name="status_good_bg">#163523</color>
+    <color name="status_warn">#F0BD62</color>
+    <color name="status_warn_bg">#3C2D14</color>
+    <color name="status_off">#B5BAC3</color>
+    <color name="status_off_bg">#2B2F36</color>
+    <color name="danger">#FF8A8A</color>
+</resources>
