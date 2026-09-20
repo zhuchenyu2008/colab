@@ -13,22 +13,13 @@ public class SystemEventReceiver extends BroadcastReceiver {
     public void onReceive(Context context, Intent intent) {
         String action = intent.getAction();
 
-        if (Intent.ACTION_POWER_CONNECTED.equals(action)) {
-            ReliableBatteryMonitorService.handleExternalPowerEvent(context, true);
-            return;
-        }
-
-        if (Intent.ACTION_POWER_DISCONNECTED.equals(action)) {
-            ReliableBatteryMonitorService.handleExternalPowerEvent(context, false);
-            return;
-        }
-
         if (BluetoothDevice.ACTION_ACL_CONNECTED.equals(action)
                 || BluetoothDevice.ACTION_ACL_DISCONNECTED.equals(action)) {
             if (!Prefs.isBluetoothAutoEnabled(context)) return;
             if (Build.VERSION.SDK_INT >= 31
                     && context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)
                     != PackageManager.PERMISSION_GRANTED) {
+                BackgroundLogStore.append(context, "蓝牙", "缺少 BLUETOOTH_CONNECT 权限，忽略连接事件");
                 return;
             }
 
@@ -51,6 +42,11 @@ public class SystemEventReceiver extends BroadcastReceiver {
 
             boolean connected = BluetoothDevice.ACTION_ACL_CONNECTED.equals(action);
             Prefs.setEnabled(context, connected);
+            BackgroundLogStore.append(
+                    context,
+                    "蓝牙",
+                    Prefs.getBluetoothName(context) + (connected ? " 已连接 → 总开关开启" : " 已断开 → 总开关关闭")
+            );
             BatteryMonitorService.applyConfig(context);
         }
     }
