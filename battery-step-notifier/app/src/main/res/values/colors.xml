@@ -1,4 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="icon_background">#FFFFFFFF</color>
+    <color name="page_bg">#F4F5F7</color>
+    <color name="surface">#FFFFFFFF</color>
+    <color name="surface_alt">#F1F3F5</color>
+    <color name="text_primary">#15171B</color>
+    <color name="text_secondary">#717783</color>
+    <color name="divider">#E6E8EC</color>
+    <color name="accent">#2F6FED</color>
+    <color name="status_good">#1B8F4D</color>
+    <color name="status_good_bg">#E8F6EE</color>
+    <color name="status_warn">#A86600</color>
+    <color name="status_warn_bg">#FFF1D6</color>
+    <color name="status_off">#6D737D</color>
+    <color name="status_off_bg">#ECEEF1</color>
+    <color name="danger">#C63C3C</color>
 </resources>
