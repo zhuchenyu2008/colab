@@ -1,10 +1,12 @@
 package com.zhuchenyu.batterystep;
 
+import android.annotation.TargetApi;
 import android.companion.AssociationInfo;
 import android.companion.CompanionDeviceService;
 import android.companion.DevicePresenceEvent;
 import android.os.Build;
 
+@TargetApi(Build.VERSION_CODES.S)
 public class WatchCompanionService extends CompanionDeviceService {
     @Override
     public void onDevicePresenceEvent(DevicePresenceEvent event) {
