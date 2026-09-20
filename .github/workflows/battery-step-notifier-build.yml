@@ -78,14 +78,14 @@ jobs:
           unzip -l "$APK" | grep -q 'classes.dex'
           apksigner verify --verbose "$APK"
           sha256sum "$APK" | tee SHA256SUMS.txt
-          cp "$APK" BatteryStepNotifier-v11.apk
+          cp "$APK" BatteryStepNotifier-v12.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: BatteryStepNotifier-v11
+          name: BatteryStepNotifier-v12
           path: |
-            BatteryStepNotifier-v11.apk
+            BatteryStepNotifier-v12.apk
             SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30
