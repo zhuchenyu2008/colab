@@ -56,6 +56,7 @@ public class DashboardActivity extends Activity {
     private Button autoStartButton;
     private Button testNotificationButton;
     private Button appSettingsButton;
+    private Button backgroundLogButton;
     private boolean syncingUi;
 
     @Override
@@ -100,12 +101,14 @@ public class DashboardActivity extends Activity {
         autoStartButton = findViewById(R.id.autoStartButton);
         testNotificationButton = findViewById(R.id.testNotificationButton);
         appSettingsButton = findViewById(R.id.appSettingsButton);
+        backgroundLogButton = findViewById(R.id.backgroundLogButton);
     }
 
     private void setupListeners() {
         enabledSwitch.setOnCheckedChangeListener((button, checked) -> {
             if (syncingUi) return;
             Prefs.setEnabled(this, checked);
+            BackgroundLogStore.append(this, "设置", "总开关=" + (checked ? "开" : "关"));
             if (checked) requestNotificationPermission();
             BatteryMonitorService.applyConfig(this);
             renderStatus();
@@ -124,6 +127,7 @@ public class DashboardActivity extends Activity {
                 return;
             }
             Prefs.setBluetoothAutoEnabled(this, checked);
+            BackgroundLogStore.append(this, "设置", "蓝牙联动=" + (checked ? "开" : "关"));
             if (checked && Prefs.getBluetoothAddress(this).isEmpty()) showBluetoothPicker();
             BatteryMonitorService.applyConfig(this);
             bindState();
@@ -132,6 +136,7 @@ public class DashboardActivity extends Activity {
         quietSwitch.setOnCheckedChangeListener((button, checked) -> {
             if (syncingUi) return;
             Prefs.setPauseOnQuietMode(this, checked);
+            BackgroundLogStore.append(this, "设置", "静音/勿扰暂停提醒=" + (checked ? "开" : "关"));
             if (checked && !hasDndAccess()) openDndSettings();
             BatteryMonitorService.applyConfig(this);
             bindState();
@@ -149,6 +154,7 @@ public class DashboardActivity extends Activity {
             public void onStopTrackingTouch(SeekBar seekBar) {
                 int value = seekBar.getProgress() + 1;
                 Prefs.setStep(DashboardActivity.this, value);
+                BackgroundLogStore.append(DashboardActivity.this, "设置", "提醒间隔=" + value + "%");
                 BatteryMonitorService.applyConfig(DashboardActivity.this);
                 Toast.makeText(DashboardActivity.this,
                         "已保存：每提升 " + value + "% 提醒",
@@ -177,6 +183,8 @@ public class DashboardActivity extends Activity {
             Toast.makeText(this, "已请求发送测试通知", Toast.LENGTH_SHORT).show();
         });
         appSettingsButton.setOnClickListener(v -> openAppDetails());
+        backgroundLogButton.setOnClickListener(v ->
+                startActivity(new Intent(this, BackgroundLogActivity.class)));
     }
 
     private void bindState() {
@@ -193,7 +201,7 @@ public class DashboardActivity extends Activity {
                 ? Prefs.getBluetoothName(this) + " · 连接开启 / 断开关闭"
                 : "未启用");
         quietSummary.setText(Prefs.pauseOnQuietMode(this)
-                ? (hasDndAccess() ? "已启用 · 恢复响铃后自动继续" : "已启用 · 免打扰权限待授权")
+                ? (hasDndAccess() ? "已启用 · 只暂停提醒，检测继续" : "已启用 · 免打扰权限待授权")
                 : "未启用");
         bluetoothButton.setText(Prefs.getBluetoothAddress(this).isEmpty()
                 ? "选择联动设备"
@@ -223,13 +231,14 @@ public class DashboardActivity extends Activity {
         if (!enabled) {
             setHero("已关闭", R.drawable.bg_status_off, R.color.status_off);
         } else if (quietBlocked) {
-            setHero("已暂停 · 静音 / 勿扰", R.drawable.bg_status_warn, R.color.status_warn);
+            String suffix = level >= 0 && level <= 100 ? " · " + level + "%" : "";
+            setHero("每分钟检测中" + suffix + " · 提醒暂停", R.drawable.bg_status_warn, R.color.status_warn);
         } else if (charging) {
             String suffix = level >= 0 && level <= 100 ? " · " + level + "%" : "";
-            setHero("正在监测" + suffix + " · 充电中", R.drawable.bg_status_good, R.color.status_good);
+            setHero("每分钟检测中" + suffix + " · 充电中", R.drawable.bg_status_good, R.color.status_good);
         } else {
             String suffix = level >= 0 && level <= 100 ? " · " + level + "%" : "";
-            setHero("等待充电" + suffix, R.drawable.bg_status_warn, R.color.status_warn);
+            setHero("每分钟检测中" + suffix + " · 未充电", R.drawable.bg_status_good, R.color.status_good);
         }
 
         batteryValue.setText(level >= 0 && level <= 100 ? level + "%" : "未知");
@@ -239,9 +248,9 @@ public class DashboardActivity extends Activity {
         if (!enabled) {
             nextReminderValue.setText("—");
         } else if (quietBlocked) {
-            nextReminderValue.setText("暂停中");
+            nextReminderValue.setText("提醒暂停，检测继续");
         } else if (!charging) {
-            nextReminderValue.setText("等待充电");
+            nextReminderValue.setText("未充电，不触发提醒");
         } else if (level >= 0 && level < 100) {
             nextReminderValue.setText("预计 " + Math.min(100, level + step) + "%");
         } else {
@@ -249,13 +258,13 @@ public class DashboardActivity extends Activity {
         }
 
         serviceValue.setText(Prefs.shouldKeepServiceRunning(this)
-                ? (enabled && charging && !quietBlocked ? "监测中" : "待机中")
+                ? "每 60 秒检测"
                 : "已停止");
         bluetoothValue.setText(Prefs.isBluetoothAutoEnabled(this)
                 ? Prefs.getBluetoothName(this)
                 : "未启用");
         quietValue.setText(Prefs.pauseOnQuietMode(this)
-                ? (quietBlocked ? "已触发暂停" : "未触发")
+                ? (quietBlocked ? "提醒已暂停，检测继续" : "未触发")
                 : "未启用");
     }
 
@@ -304,6 +313,7 @@ public class DashboardActivity extends Activity {
                         BluetoothDevice device = devices.get(which);
                         Prefs.setBluetoothDevice(this, device.getAddress(), safeName(device));
                         Prefs.setBluetoothAutoEnabled(this, true);
+                        BackgroundLogStore.append(this, "设置", "联动设备=" + safeName(device));
                         BatteryMonitorService.applyConfig(this);
                         bindState();
                     })
