@@ -47,6 +47,14 @@ public class SystemEventReceiver extends BroadcastReceiver {
                     "蓝牙",
                     Prefs.getBluetoothName(context) + (connected ? " 已连接 → 总开关开启" : " 已断开 → 总开关关闭")
             );
+
+            if (connected) {
+                if (CompanionWatchManager.isAssociated(context)) {
+                    CompanionWatchManager.ensureObservingIfAssociated(context);
+                } else {
+                    CompanionSetupNotifier.notifyIfNeeded(context);
+                }
+            }
             BatteryMonitorService.applyConfig(context);
         }
     }
