@@ -21,6 +21,7 @@ import android.os.BatteryManager;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
+import android.os.SystemClock;
 
 import java.lang.reflect.Method;
 import java.text.SimpleDateFormat;
@@ -33,7 +34,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 public class ReliableBatteryMonitorService extends Service {
-    public static final String ACTION_REFRESH = "com.zhuchenyu.batterystep.REFRESH_V3";
+    public static final String ACTION_REFRESH = "com.zhuchenyu.batterystep.REFRESH_V4";
     public static final String ACTION_TEST = "com.zhuchenyu.batterystep.TEST_ALERT";
 
     private static final String CHANNEL_MONITOR = "battery_monitor";
@@ -41,8 +42,11 @@ public class ReliableBatteryMonitorService extends Service {
     private static final int MONITOR_ID = 1001;
     private static final int ALERT_BASE = 4000;
     private static final long ACTIVE_POLL_SECONDS = 5L;
-    private static final long IDLE_POLL_SECONDS = 60L;
+    private static final long IDLE_POLL_SECONDS = 30L;
     private static final long FOREGROUND_REFRESH_MS = 15_000L;
+    private static final long POWER_CONNECTED_GRACE_MS = 30_000L;
+
+    private static volatile ReliableBatteryMonitorService instance;
 
     private final Object stateLock = new Object();
     private ScheduledExecutorService scheduler;
@@ -58,14 +62,19 @@ public class ReliableBatteryMonitorService extends Service {
     private PowerManager.WakeLock wakeLock;
     private long lastForegroundRefresh;
     private int lastForegroundLevel = -1;
+    private long powerConnectedHintUntilElapsed;
 
     private final BroadcastReceiver systemReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
             String action = intent.getAction();
-            if (Intent.ACTION_BATTERY_CHANGED.equals(action)
-                    || Intent.ACTION_POWER_CONNECTED.equals(action)
-                    || Intent.ACTION_POWER_DISCONNECTED.equals(action)
+            if (Intent.ACTION_POWER_CONNECTED.equals(action)
+                    || BatteryManager.ACTION_CHARGING.equals(action)) {
+                handlePowerHint(true);
+            } else if (Intent.ACTION_POWER_DISCONNECTED.equals(action)
+                    || BatteryManager.ACTION_DISCHARGING.equals(action)) {
+                handlePowerHint(false);
+            } else if (Intent.ACTION_BATTERY_CHANGED.equals(action)
                     || Intent.ACTION_SCREEN_ON.equals(action)
                     || Intent.ACTION_SCREEN_OFF.equals(action)) {
                 triggerImmediateSample();
@@ -97,10 +106,20 @@ public class ReliableBatteryMonitorService extends Service {
     }
 
     public static void refresh(Context context) {
+        ReliableBatteryMonitorService live = instance;
+        if (live != null) {
+            live.refreshInProcess();
+            return;
+        }
         startWithAction(context, ACTION_REFRESH);
     }
 
     public static void sendTestAlert(Context context) {
+        ReliableBatteryMonitorService live = instance;
+        if (live != null) {
+            live.sendAlertNotification(999, "测试通知", "后台提醒通道工作正常");
+            return;
+        }
         startWithAction(context, ACTION_TEST);
     }
 
@@ -109,7 +128,23 @@ public class ReliableBatteryMonitorService extends Service {
         else stop(context);
     }
 
+    public static void handleExternalPowerEvent(Context context, boolean connected) {
+        ReliableBatteryMonitorService live = instance;
+        if (live != null) {
+            live.handlePowerHint(connected);
+            return;
+        }
+        if (Prefs.shouldKeepServiceRunning(context)) {
+            startWithAction(context, ACTION_REFRESH);
+        }
+    }
+
     public static void stop(Context context) {
+        ReliableBatteryMonitorService live = instance;
+        if (live != null) {
+            live.stopSelf();
+            return;
+        }
         context.stopService(new Intent(context, ReliableBatteryMonitorService.class));
     }
 
@@ -126,6 +161,7 @@ public class ReliableBatteryMonitorService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        instance = this;
         createChannels();
         createWakeLock();
         scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -152,22 +188,33 @@ public class ReliableBatteryMonitorService extends Service {
             return START_NOT_STICKY;
         }
 
+        refreshInProcess();
+        return START_STICKY;
+    }
+
+    private void refreshInProcess() {
+        if (!Prefs.shouldKeepServiceRunning(this)) {
+            stopSelf();
+            return;
+        }
         synchronized (stateLock) {
             step = Prefs.getStep(this);
             updateQuietPauseStateLocked();
+            syncWakeLockLocked();
             ensurePollingCadenceLocked();
         }
         if (Prefs.isBluetoothAutoEnabled(this)) checkSelectedDeviceNow();
         triggerImmediateSample();
-        return START_STICKY;
     }
 
     @Override
     public void onDestroy() {
+        if (instance == this) instance = null;
         synchronized (stateLock) {
             if (pollFuture != null) pollFuture.cancel(true);
             pollFuture = null;
             scheduledIntervalSeconds = -1L;
+            powerConnectedHintUntilElapsed = 0L;
             releaseWakeLockLocked();
         }
         if (scheduler != null) scheduler.shutdownNow();
@@ -191,6 +238,8 @@ public class ReliableBatteryMonitorService extends Service {
         filter.addAction(Intent.ACTION_BATTERY_CHANGED);
         filter.addAction(Intent.ACTION_POWER_CONNECTED);
         filter.addAction(Intent.ACTION_POWER_DISCONNECTED);
+        filter.addAction(BatteryManager.ACTION_CHARGING);
+        filter.addAction(BatteryManager.ACTION_DISCHARGING);
         filter.addAction(Intent.ACTION_SCREEN_ON);
         filter.addAction(Intent.ACTION_SCREEN_OFF);
         filter.addAction(BluetoothDevice.ACTION_ACL_CONNECTED);
@@ -207,6 +256,27 @@ public class ReliableBatteryMonitorService extends Service {
         receiverRegistered = true;
     }
 
+    private void handlePowerHint(boolean connected) {
+        synchronized (stateLock) {
+            updateQuietPauseStateLocked();
+            if (connected) {
+                powerConnectedHintUntilElapsed = SystemClock.elapsedRealtime() + POWER_CONNECTED_GRACE_MS;
+                charging = true;
+                if (monitoringAllowedLocked() && nextTarget <= 0 && currentLevel >= 0 && currentLevel < 100) {
+                    beginSessionLocked(currentLevel);
+                }
+            } else {
+                powerConnectedHintUntilElapsed = 0L;
+                charging = false;
+                clearSessionTargetsLocked();
+            }
+            syncWakeLockLocked();
+            ensurePollingCadenceLocked();
+            updateForegroundLocked(true);
+        }
+        triggerImmediateSample();
+    }
+
     private void triggerImmediateSample() {
         ScheduledExecutorService local = scheduler;
         if (local == null || local.isShutdown()) return;
@@ -218,16 +288,19 @@ public class ReliableBatteryMonitorService extends Service {
         if (battery == null) return;
 
         int level;
-        boolean nowCharging;
+        boolean directCharging;
         try {
             level = battery.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY);
-            nowCharging = battery.isCharging();
+            directCharging = battery.isCharging();
         } catch (RuntimeException e) {
             return;
         }
         if (level < 0 || level > 100) return;
 
         synchronized (stateLock) {
+            boolean hintedCharging = SystemClock.elapsedRealtime() < powerConnectedHintUntilElapsed;
+            boolean nowCharging = directCharging || hintedCharging;
+            if (directCharging) powerConnectedHintUntilElapsed = 0L;
             processBatterySampleLocked(level, nowCharging);
         }
     }
