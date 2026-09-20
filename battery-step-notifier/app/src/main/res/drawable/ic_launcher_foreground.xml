@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 极简电池轮廓 -->
+    <path
+        android:pathData="M24,29 H75 C80,29 84,33 84,38 V70 C84,75 80,79 75,79 H24 C19,79 15,75 15,70 V38 C15,33 19,29 24,29 Z"
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- 电池凸起 -->
+    <path
+        android:pathData="M84,43 H90 C93,43 95,45 95,48 V60 C95,63 93,65 90,65 H84 Z"
+        android:fillColor="#FF000000" />
+
+    <!-- 三级电量阶梯 -->
+    <path
+        android:pathData="M27,62 H39 V69 H27 Z"
+        android:fillColor="#FF000000" />
+    <path
+        android:pathData="M44,54 H57 V69 H44 Z"
+        android:fillColor="#FF000000" />
+    <path
+        android:pathData="M62,44 H76 V69 H62 Z"
+        android:fillColor="#FF000000" />
+</vector>
