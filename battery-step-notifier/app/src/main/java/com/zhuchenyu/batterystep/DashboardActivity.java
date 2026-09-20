@@ -11,7 +11,6 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.media.AudioManager;
 import android.net.Uri;
 import android.os.BatteryManager;
 import android.os.Build;
@@ -44,6 +43,7 @@ public class DashboardActivity extends Activity {
     private TextView statusText;
     private Button bluetoothButton;
     private Button batteryOptimizationButton;
+    private Button exactAlarmButton;
     private Button dndButton;
     private boolean syncingUi;
 
@@ -60,6 +60,7 @@ public class DashboardActivity extends Activity {
         super.onResume();
         bindState();
         BatteryMonitorService.applyConfig(this);
+        AlarmMonitor.applyConfig(this);
         RecentsHelper.setExcluded(this, Prefs.hideFromRecents(this));
     }
 
@@ -70,12 +71,14 @@ public class DashboardActivity extends Activity {
         int pad = dp(20);
         root.setPadding(pad, pad, pad, pad);
         scroll.addView(root, new ScrollView.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        TextView title = text("电量阶梯提醒", 28);
-        root.addView(title, matchWrap());
-        TextView desc = text("充电时按设定百分比提醒。v10 后台电量采用 BatteryManager 系统直读，不再依赖厂商是否及时发送电量广播。\n", 14);
-        root.addView(desc, matchWrap());
+        root.addView(text("电量阶梯提醒", 28), matchWrap());
+        root.addView(text(
+                "v11：充电提醒改由 Android 系统 AlarmManager 驱动。即使 App 后台线程被 ColorOS / OxygenOS 冻结，系统仍可按时唤醒接收器读取电量。\n",
+                14
+        ), matchWrap());
 
         enabledSwitch = new Switch(this);
         enabledSwitch.setText("总开关");
@@ -83,7 +86,12 @@ public class DashboardActivity extends Activity {
         enabledSwitch.setOnCheckedChangeListener((b, checked) -> {
             if (syncingUi) return;
             Prefs.setEnabled(this, checked);
-            if (checked) requestNotificationPermission();
+            if (checked) {
+                requestNotificationPermission();
+                if (!AlarmMonitor.canScheduleExact(this)) requestExactAlarmAccess();
+            }
+            AlarmMonitor.clearSession(this);
+            AlarmMonitor.applyConfig(this);
             BatteryMonitorService.applyConfig(this);
             renderStatus();
         });
@@ -98,8 +106,7 @@ public class DashboardActivity extends Activity {
         });
         root.addView(hideRecentsSwitch, matchWrap());
 
-        TextView autoTitle = text("\n自动化", 20);
-        root.addView(autoTitle, matchWrap());
+        root.addView(text("\n自动化", 20), matchWrap());
 
         bluetoothSwitch = new Switch(this);
         bluetoothSwitch.setText("指定手表连接=开启，断开=关闭");
@@ -111,6 +118,8 @@ public class DashboardActivity extends Activity {
             }
             Prefs.setBluetoothAutoEnabled(this, checked);
             if (checked && Prefs.getBluetoothAddress(this).isEmpty()) showBluetoothPicker();
+            AlarmMonitor.clearSession(this);
+            AlarmMonitor.applyConfig(this);
             BatteryMonitorService.applyConfig(this);
             renderStatus();
         });
@@ -129,6 +138,8 @@ public class DashboardActivity extends Activity {
             if (syncingUi) return;
             Prefs.setPauseOnQuietMode(this, checked);
             if (checked && !hasDndAccess()) openDndSettings();
+            AlarmMonitor.clearSession(this);
+            AlarmMonitor.applyConfig(this);
             BatteryMonitorService.applyConfig(this);
             renderStatus();
         });
@@ -138,36 +149,51 @@ public class DashboardActivity extends Activity {
         dndButton.setOnClickListener(v -> openDndSettings());
         root.addView(dndButton, matchWrap());
 
-        TextView stepTitle = text("\n提醒间隔", 20);
-        root.addView(stepTitle, matchWrap());
+        root.addView(text("\n提醒间隔", 20), matchWrap());
         stepText = text("1%", 28);
         root.addView(stepText, matchWrap());
         stepSeek = new SeekBar(this);
         stepSeek.setMax(19);
         stepSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 stepText.setText((progress + 1) + "%");
             }
+
             @Override public void onStartTrackingTouch(SeekBar seekBar) {}
-            @Override public void onStopTrackingTouch(SeekBar seekBar) {
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
                 int value = seekBar.getProgress() + 1;
                 Prefs.setStep(DashboardActivity.this, value);
+                AlarmMonitor.clearSession(DashboardActivity.this);
+                AlarmMonitor.applyConfig(DashboardActivity.this);
                 BatteryMonitorService.applyConfig(DashboardActivity.this);
-                Toast.makeText(DashboardActivity.this, "已保存：每提升 " + value + "% 提醒", Toast.LENGTH_SHORT).show();
+                Toast.makeText(DashboardActivity.this,
+                        "已保存：每提升 " + value + "% 提醒",
+                        Toast.LENGTH_SHORT).show();
             }
         });
         root.addView(stepSeek, matchWrap());
 
-        TextView reliability = text("\n后台可靠性", 20);
-        root.addView(reliability, matchWrap());
+        root.addView(text("\n后台可靠性", 20), matchWrap());
+
+        exactAlarmButton = new Button(this);
+        exactAlarmButton.setOnClickListener(v -> requestExactAlarmAccess());
+        root.addView(exactAlarmButton, matchWrap());
+        root.addView(text(
+                "这是 v11 的关键权限：允许系统在 App 被后台冻结时，仍按约 30 秒间隔唤醒一次进行充电电量检查。\n",
+                12
+        ), matchWrap());
 
         Button autoStartButton = new Button(this);
         autoStartButton.setText("打开自启动管理（OPPO / 一加）");
         autoStartButton.setOnClickListener(v -> openAutoStartSettings());
         root.addView(autoStartButton, matchWrap());
-
-        TextView autoHint = text("请在系统页面手动允许“自启动/自动启动”。App 已包含 BOOT_COMPLETED 接收器，但厂商可额外拦截开机自启。\n", 12);
-        root.addView(autoHint, matchWrap());
+        root.addView(text(
+                "请在系统页面手动允许“自启动/自动启动”。App 同时监听开机与解锁系统事件。\n",
+                12
+        ), matchWrap());
 
         batteryOptimizationButton = new Button(this);
         batteryOptimizationButton.setOnClickListener(v -> requestIgnoreBatteryOptimizations());
@@ -191,8 +217,11 @@ public class DashboardActivity extends Activity {
         statusText.setPadding(0, dp(18), 0, dp(18));
         root.addView(statusText, matchWrap());
 
-        TextView note = text("说明：充电监测开启时每 15 秒直接读取一次系统 BatteryManager 电量；锁屏充电时使用 partial wake lock 保证定时采样。拔电、关闭总开关、手表断开或进入静音/免打扰后会释放。", 12);
-        root.addView(note, matchWrap());
+        root.addView(text(
+                "说明：充电时主要由系统精确闹钟每 30 秒唤醒一次 Receiver，直接读取 BatteryManager。前台服务仍保留作状态展示和蓝牙/静音辅助，但提醒不再依赖它自己的 Handler 定时器。",
+                12
+        ), matchWrap());
+
         return scroll;
     }
 
@@ -211,6 +240,9 @@ public class DashboardActivity extends Activity {
         batteryOptimizationButton.setText(isIgnoringBatteryOptimizations()
                 ? "电池优化：已忽略（后台更可靠）"
                 : "电池优化：点此允许忽略");
+        exactAlarmButton.setText(AlarmMonitor.canScheduleExact(this)
+                ? "闹钟和提醒：已授权 ✅"
+                : "闹钟和提醒：点此授权（必需）");
         syncingUi = false;
         renderStatus();
     }
@@ -218,15 +250,45 @@ public class DashboardActivity extends Activity {
     private void renderStatus() {
         if (statusText == null) return;
         BatteryManager battery = getSystemService(BatteryManager.class);
-        int level = battery == null ? -1 : battery.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY);
+        int level = battery == null ? -1
+                : battery.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY);
         boolean charging = battery != null && battery.isCharging();
         StringBuilder s = new StringBuilder();
         s.append(Prefs.isEnabled(this) ? "总开关：开启" : "总开关：关闭");
-        s.append(" · 系统直读电量：").append(level >= 0 && level <= 100 ? level + "%" : "未知");
+        s.append(" · 系统直读电量：")
+                .append(level >= 0 && level <= 100 ? level + "%" : "未知");
         s.append(charging ? " · 正在充电" : " · 未充电");
-        if (Prefs.isBluetoothAutoEnabled(this)) s.append(" · 联动设备：").append(Prefs.getBluetoothName(this));
-        if (!isIgnoringBatteryOptimizations()) s.append("\n⚠ 电池优化尚未忽略");
+        if (Prefs.isBluetoothAutoEnabled(this)) {
+            s.append(" · 联动设备：").append(Prefs.getBluetoothName(this));
+        }
+        if (!AlarmMonitor.canScheduleExact(this)) {
+            s.append("\n⚠ 未授权“闹钟和提醒”，v11 后台系统唤醒无法工作");
+        }
+        if (!isIgnoringBatteryOptimizations()) {
+            s.append("\n⚠ 电池优化尚未忽略");
+        }
         statusText.setText(s.toString());
+    }
+
+    private void requestExactAlarmAccess() {
+        if (Build.VERSION.SDK_INT < 31 || AlarmMonitor.canScheduleExact(this)) {
+            Toast.makeText(this, "闹钟和提醒权限已可用", Toast.LENGTH_SHORT).show();
+            AlarmMonitor.applyConfig(this);
+            return;
+        }
+        try {
+            Intent intent = new Intent(
+                    Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                    Uri.parse("package:" + getPackageName())
+            );
+            startActivity(intent);
+        } catch (Exception e) {
+            try {
+                startActivity(new Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM));
+            } catch (Exception ignored) {
+                openAppDetails();
+            }
+        }
     }
 
     private void showBluetoothPicker() {
@@ -256,6 +318,8 @@ public class DashboardActivity extends Activity {
                         BluetoothDevice d = devices.get(which);
                         Prefs.setBluetoothDevice(this, d.getAddress(), safeName(d));
                         Prefs.setBluetoothAutoEnabled(this, true);
+                        AlarmMonitor.clearSession(this);
+                        AlarmMonitor.applyConfig(this);
                         BatteryMonitorService.applyConfig(this);
                         bindState();
                     })
@@ -277,7 +341,8 @@ public class DashboardActivity extends Activity {
 
     private boolean hasBluetoothPermission() {
         return Build.VERSION.SDK_INT < 31
-                || checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED;
+                || checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)
+                == PackageManager.PERMISSION_GRANTED;
     }
 
     private void requestBluetoothPermission() {
@@ -288,7 +353,8 @@ public class DashboardActivity extends Activity {
 
     private void requestNotificationPermission() {
         if (Build.VERSION.SDK_INT >= 33
-                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQ_NOTIFICATIONS);
         }
     }
@@ -297,13 +363,16 @@ public class DashboardActivity extends Activity {
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == REQ_BT) {
-            boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+            boolean granted = grantResults.length > 0
+                    && grantResults[0] == PackageManager.PERMISSION_GRANTED;
             if (granted) {
                 Prefs.setBluetoothAutoEnabled(this, true);
                 showBluetoothPicker();
             } else {
                 Prefs.setBluetoothAutoEnabled(this, false);
-                Toast.makeText(this, "需要附近设备权限才能识别手表", Toast.LENGTH_LONG).show();
+                Toast.makeText(this,
+                        "需要附近设备权限才能识别手表",
+                        Toast.LENGTH_LONG).show();
             }
             bindState();
         }
@@ -317,22 +386,24 @@ public class DashboardActivity extends Activity {
                 {"com.oneplus.security", "com.oneplus.security.chainlaunch.view.ChainLaunchAppListActivity"},
                 {"com.coloros.safecenter", "com.coloros.privacypermissionsentry.PermissionTopActivity"}
         };
-
         for (String[] candidate : candidates) {
             try {
                 Intent intent = new Intent();
                 intent.setComponent(new ComponentName(candidate[0], candidate[1]));
                 if (getPackageManager().resolveActivity(intent, 0) != null) {
                     startActivity(intent);
-                    Toast.makeText(this, "请找到“电量阶梯提醒”并允许自启动", Toast.LENGTH_LONG).show();
+                    Toast.makeText(this,
+                            "请找到“电量阶梯提醒”并允许自启动",
+                            Toast.LENGTH_LONG).show();
                     return;
                 }
             } catch (Exception ignored) {
             }
         }
-
         openAppDetails();
-        Toast.makeText(this, "系统未开放直达入口，请在应用详情/电池中寻找“自启动、自动启动或允许后台活动”", Toast.LENGTH_LONG).show();
+        Toast.makeText(this,
+                "系统未开放直达入口，请在应用详情/电池中寻找“自启动、自动启动或允许后台活动”",
+                Toast.LENGTH_LONG).show();
     }
 
     private boolean isIgnoringBatteryOptimizations() {
@@ -346,11 +417,10 @@ public class DashboardActivity extends Activity {
             return;
         }
         try {
-            Intent intent = new Intent(
+            startActivity(new Intent(
                     Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
                     Uri.parse("package:" + getPackageName())
-            );
-            startActivity(intent);
+            ));
         } catch (Exception e) {
             try {
                 startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
