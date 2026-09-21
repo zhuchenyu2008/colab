@@ -1,13 +1,29 @@
 package com.zhuchenyu.batterystep;
 
+import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.companion.AssociationInfo;
 import android.companion.CompanionDeviceService;
 import android.companion.DevicePresenceEvent;
 import android.os.Build;
 
-@TargetApi(Build.VERSION_CODES.S)
+@TargetApi(31)
+@SuppressLint("NewApi")
 public class WatchCompanionService extends CompanionDeviceService {
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        BackgroundLogStore.append(this, "伴侣", "CompanionDeviceService 已创建：系统正在绑定伴侣服务");
+        CompanionWatchManager.ensureObservingIfAssociated(this);
+        if (Prefs.isEnabled(this)) BatteryMonitorService.start(this);
+    }
+
+    @Override
+    public void onDestroy() {
+        BackgroundLogStore.append(this, "伴侣", "CompanionDeviceService 已销毁：系统解除伴侣服务绑定");
+        super.onDestroy();
+    }
+
     @Override
     public void onDevicePresenceEvent(DevicePresenceEvent event) {
         if (Build.VERSION.SDK_INT < 36 || event == null) return;
