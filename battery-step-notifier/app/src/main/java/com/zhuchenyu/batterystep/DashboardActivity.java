@@ -54,6 +54,7 @@ public class DashboardActivity extends Activity {
     private Button notificationButton;
     private Button batteryOptimizationButton;
     private Button autoStartButton;
+    private Button companionButton;
     private Button testNotificationButton;
     private Button appSettingsButton;
     private Button backgroundLogButton;
@@ -71,6 +72,8 @@ public class DashboardActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        CompanionWatchManager.ensureObservingIfAssociated(this);
+        CompanionSetupNotifier.notifyIfNeeded(this);
         bindState();
         BatteryMonitorService.applyConfig(this);
         RecentsHelper.setExcluded(this, Prefs.hideFromRecents(this));
@@ -99,6 +102,7 @@ public class DashboardActivity extends Activity {
         notificationButton = findViewById(R.id.notificationButton);
         batteryOptimizationButton = findViewById(R.id.batteryOptimizationButton);
         autoStartButton = findViewById(R.id.autoStartButton);
+        companionButton = findViewById(R.id.companionButton);
         testNotificationButton = findViewById(R.id.testNotificationButton);
         appSettingsButton = findViewById(R.id.appSettingsButton);
         backgroundLogButton = findViewById(R.id.backgroundLogButton);
@@ -129,6 +133,7 @@ public class DashboardActivity extends Activity {
             Prefs.setBluetoothAutoEnabled(this, checked);
             BackgroundLogStore.append(this, "设置", "蓝牙联动=" + (checked ? "开" : "关"));
             if (checked && Prefs.getBluetoothAddress(this).isEmpty()) showBluetoothPicker();
+            if (checked) CompanionSetupNotifier.notifyIfNeeded(this);
             BatteryMonitorService.applyConfig(this);
             bindState();
         });
@@ -177,6 +182,8 @@ public class DashboardActivity extends Activity {
         });
         batteryOptimizationButton.setOnClickListener(v -> requestIgnoreBatteryOptimizations());
         autoStartButton.setOnClickListener(v -> openAutoStartSettings());
+        companionButton.setOnClickListener(v ->
+                startActivity(new Intent(this, CompanionSetupActivity.class)));
         testNotificationButton.setOnClickListener(v -> {
             requestNotificationPermission();
             BatteryMonitorService.sendTestAlert(this);
@@ -214,6 +221,16 @@ public class DashboardActivity extends Activity {
                 ? "✓  电池优化已忽略"
                 : "!  电池优化需忽略");
         autoStartButton.setText("自启动管理 · 请确认");
+        if (!CompanionWatchManager.isSupported(this)) {
+            companionButton.setText("系统手表伴侣 · 当前系统不可用");
+            companionButton.setEnabled(false);
+        } else if (CompanionWatchManager.isAssociated(this)) {
+            companionButton.setText("✓  系统手表伴侣 · 已关联");
+            companionButton.setEnabled(true);
+        } else {
+            companionButton.setText("!  系统手表伴侣 · 未关联");
+            companionButton.setEnabled(true);
+        }
         footerVersion.setText("版本 " + BuildConfig.VERSION_NAME + " · 电量阶梯提醒");
         syncingUi = false;
         renderStatus();
@@ -258,7 +275,7 @@ public class DashboardActivity extends Activity {
         }
 
         serviceValue.setText(Prefs.shouldKeepServiceRunning(this)
-                ? "每 60 秒检测"
+                ? "系统分钟广播 + 60 秒看门狗"
                 : "已停止");
         bluetoothValue.setText(Prefs.isBluetoothAutoEnabled(this)
                 ? Prefs.getBluetoothName(this)
@@ -314,6 +331,7 @@ public class DashboardActivity extends Activity {
                         Prefs.setBluetoothDevice(this, device.getAddress(), safeName(device));
                         Prefs.setBluetoothAutoEnabled(this, true);
                         BackgroundLogStore.append(this, "设置", "联动设备=" + safeName(device));
+                        CompanionSetupNotifier.notifyIfNeeded(this);
                         BatteryMonitorService.applyConfig(this);
                         bindState();
                     })
