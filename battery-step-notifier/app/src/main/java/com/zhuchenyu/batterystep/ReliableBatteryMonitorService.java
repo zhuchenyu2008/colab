@@ -22,6 +22,7 @@ import android.os.BatteryManager;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
+import android.os.SystemClock;
 
 import java.lang.reflect.Method;
 import java.text.SimpleDateFormat;
@@ -29,25 +30,28 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 public class ReliableBatteryMonitorService extends Service {
-    public static final String ACTION_REFRESH = "com.zhuchenyu.batterystep.REFRESH_V5";
+    public static final String ACTION_REFRESH = "com.zhuchenyu.batterystep.REFRESH_V6";
     public static final String ACTION_TEST = "com.zhuchenyu.batterystep.TEST_ALERT";
 
     private static final String CHANNEL_MONITOR = "battery_monitor";
     private static final String CHANNEL_ALERT = "battery_alert";
     private static final int MONITOR_ID = 1001;
     private static final int ALERT_BASE = 4000;
-    private static final long POLL_SECONDS = 60L;
+    private static final long POLL_MS = 60_000L;
+    private static final long SIGNAL_DEDUPE_MS = 30_000L;
 
     private static volatile ReliableBatteryMonitorService instance;
 
     private final Object stateLock = new Object();
     private ScheduledExecutorService scheduler;
-    private ScheduledFuture<?> pollFuture;
+    private ScheduledFuture<?> watchdogFuture;
+    private long watchdogExpectedElapsed;
     private boolean receiverRegistered;
     private boolean charging;
     private boolean quietPaused;
@@ -57,12 +61,20 @@ public class ReliableBatteryMonitorService extends Service {
     private int step = 1;
     private PowerManager.WakeLock wakeLock;
     private long lastSampleAt;
+    private long lastSampleElapsed;
+    private long sampleSequence;
 
     private final BroadcastReceiver systemReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
             String action = intent.getAction();
-            if (AudioManager.RINGER_MODE_CHANGED_ACTION.equals(action)
+            if (Intent.ACTION_TIME_TICK.equals(action)) {
+                enqueueSample("系统分钟广播", SIGNAL_DEDUPE_MS);
+            } else if (Intent.ACTION_POWER_CONNECTED.equals(action)
+                    || Intent.ACTION_POWER_DISCONNECTED.equals(action)
+                    || Intent.ACTION_BATTERY_CHANGED.equals(action)) {
+                enqueueSample("系统电源/电量事件", SIGNAL_DEDUPE_MS);
+            } else if (AudioManager.RINGER_MODE_CHANGED_ACTION.equals(action)
                     || NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED.equals(action)
                     || NotificationManager.ACTION_NOTIFICATION_POLICY_ACCESS_GRANTED_CHANGED.equals(action)) {
                 synchronized (stateLock) {
@@ -125,11 +137,7 @@ public class ReliableBatteryMonitorService extends Service {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent);
             else context.startService(intent);
         } catch (RuntimeException e) {
-            BackgroundLogStore.append(
-                    context,
-                    "服务",
-                    "启动失败：" + e.getClass().getSimpleName()
-            );
+            BackgroundLogStore.append(context, "服务", "启动失败：" + describeThrowable(e));
         }
     }
 
@@ -140,8 +148,14 @@ public class ReliableBatteryMonitorService extends Service {
         createChannels();
         createWakeLock();
         scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread thread = new Thread(r, "BatteryMinutePoller");
-            thread.setDaemon(true);
+            Thread thread = new Thread(r, "BatteryMinuteWatchdog");
+            thread.setDaemon(false);
+            thread.setUncaughtExceptionHandler((t, e) ->
+                    BackgroundLogStore.append(
+                            ReliableBatteryMonitorService.this,
+                            "异常",
+                            "后台线程未捕获异常：" + describeThrowable(e)
+                    ));
             return thread;
         });
         step = Prefs.getStep(this);
@@ -150,9 +164,15 @@ public class ReliableBatteryMonitorService extends Service {
         registerSystemReceiver();
         checkSelectedDeviceNow();
         acquireWakeLock();
-        startMinutePolling();
-        BackgroundLogStore.append(this, "服务", "前台监测服务启动；固定每 60 秒检测一次");
-        triggerImmediateSample("服务启动");
+        synchronized (stateLock) {
+            scheduleNextWatchdogLocked(POLL_MS);
+        }
+        BackgroundLogStore.append(
+                this,
+                "服务",
+                "前台监测服务启动；主心跳=系统 ACTION_TIME_TICK；兜底=60秒自恢复看门狗"
+        );
+        enqueueSample("服务启动", 0L);
     }
 
     @Override
@@ -181,10 +201,12 @@ public class ReliableBatteryMonitorService extends Service {
             step = Prefs.getStep(this);
             updateQuietPauseStateLocked();
             acquireWakeLockLocked();
-            ensureMinutePollingLocked();
+            ensureWatchdogLocked();
             updateForegroundLocked();
         }
         if (Prefs.isBluetoothAutoEnabled(this)) checkSelectedDeviceNow();
+        CompanionWatchManager.ensureObservingIfAssociated(this);
+        enqueueSample("配置刷新", SIGNAL_DEDUPE_MS);
     }
 
     @Override
@@ -192,8 +214,8 @@ public class ReliableBatteryMonitorService extends Service {
         BackgroundLogStore.append(this, "服务", "前台监测服务停止");
         if (instance == this) instance = null;
         synchronized (stateLock) {
-            if (pollFuture != null) pollFuture.cancel(true);
-            pollFuture = null;
+            if (watchdogFuture != null) watchdogFuture.cancel(true);
+            watchdogFuture = null;
             releaseWakeLockLocked();
         }
         if (scheduler != null) scheduler.shutdownNow();
@@ -214,6 +236,10 @@ public class ReliableBatteryMonitorService extends Service {
 
     private void registerSystemReceiver() {
         IntentFilter filter = new IntentFilter();
+        filter.addAction(Intent.ACTION_TIME_TICK);
+        filter.addAction(Intent.ACTION_BATTERY_CHANGED);
+        filter.addAction(Intent.ACTION_POWER_CONNECTED);
+        filter.addAction(Intent.ACTION_POWER_DISCONNECTED);
         filter.addAction(AudioManager.RINGER_MODE_CHANGED_ACTION);
         filter.addAction(NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED);
         filter.addAction(NotificationManager.ACTION_NOTIFICATION_POLICY_ACCESS_GRANTED_CHANGED);
@@ -225,48 +251,89 @@ public class ReliableBatteryMonitorService extends Service {
         receiverRegistered = true;
     }
 
-    private void startMinutePolling() {
-        synchronized (stateLock) {
-            ensureMinutePollingLocked();
+    private void ensureWatchdogLocked() {
+        if (scheduler == null || scheduler.isShutdown()) return;
+        if (watchdogFuture != null && !watchdogFuture.isCancelled() && !watchdogFuture.isDone()) return;
+        scheduleNextWatchdogLocked(POLL_MS);
+    }
+
+    private void scheduleNextWatchdogLocked(long delayMs) {
+        if (scheduler == null || scheduler.isShutdown()) return;
+        long delay = Math.max(1_000L, delayMs);
+        watchdogExpectedElapsed = SystemClock.elapsedRealtime() + delay;
+        try {
+            watchdogFuture = scheduler.schedule(
+                    this::runWatchdogSafely,
+                    delay,
+                    TimeUnit.MILLISECONDS
+            );
+        } catch (RejectedExecutionException e) {
+            BackgroundLogStore.append(this, "异常", "看门狗调度被拒绝：" + describeThrowable(e));
         }
     }
 
-    private void ensureMinutePollingLocked() {
-        if (scheduler == null || scheduler.isShutdown()) return;
-        if (pollFuture != null && !pollFuture.isCancelled() && !pollFuture.isDone()) return;
-        pollFuture = scheduler.scheduleAtFixedRate(
-                () -> sampleBatteryDirect("定时"),
-                POLL_SECONDS,
-                POLL_SECONDS,
-                TimeUnit.SECONDS
-        );
+    private void runWatchdogSafely() {
+        long expected;
+        synchronized (stateLock) {
+            expected = watchdogExpectedElapsed;
+            watchdogFuture = null;
+        }
+        long now = SystemClock.elapsedRealtime();
+        long lateMs = expected > 0 ? Math.max(0L, now - expected) : 0L;
+        try {
+            runSampleSafely("60秒看门狗 | 调度延迟=" + lateMs + "ms", SIGNAL_DEDUPE_MS);
+        } catch (Throwable t) {
+            BackgroundLogStore.append(this, "异常", "看门狗外层异常：" + describeThrowable(t));
+        } finally {
+            synchronized (stateLock) {
+                if (Prefs.shouldKeepServiceRunning(this)
+                        && scheduler != null
+                        && !scheduler.isShutdown()) {
+                    scheduleNextWatchdogLocked(POLL_MS);
+                }
+            }
+        }
     }
 
-    private void triggerImmediateSample(String source) {
+    private void enqueueSample(String source, long minimumGapMs) {
         ScheduledExecutorService local = scheduler;
         if (local == null || local.isShutdown()) return;
-        local.execute(() -> sampleBatteryDirect(source));
+        try {
+            local.execute(() -> runSampleSafely(source, minimumGapMs));
+        } catch (RejectedExecutionException e) {
+            BackgroundLogStore.append(this, "异常", "检测任务入队失败：" + describeThrowable(e));
+        }
+    }
+
+    private void runSampleSafely(String source, long minimumGapMs) {
+        try {
+            long nowElapsed = SystemClock.elapsedRealtime();
+            synchronized (stateLock) {
+                if (minimumGapMs > 0
+                        && lastSampleElapsed > 0
+                        && nowElapsed - lastSampleElapsed < minimumGapMs) {
+                    return;
+                }
+            }
+            sampleBatteryDirect(source);
+        } catch (Throwable t) {
+            BackgroundLogStore.append(this, "异常", source + " 执行失败：" + describeThrowable(t));
+            synchronized (stateLock) {
+                ensureWatchdogLocked();
+            }
+        }
     }
 
     private void sampleBatteryDirect(String source) {
         BatteryManager battery = getSystemService(BatteryManager.class);
         if (battery == null) {
-            BackgroundLogStore.append(this, "检测", source + "：BatteryManager 不可用");
-            return;
+            throw new IllegalStateException("BatteryManager unavailable");
         }
 
-        int level;
-        boolean nowCharging;
-        try {
-            level = battery.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY);
-            nowCharging = battery.isCharging();
-        } catch (RuntimeException e) {
-            BackgroundLogStore.append(this, "检测", source + "：读取失败 " + e.getClass().getSimpleName());
-            return;
-        }
+        int level = battery.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY);
+        boolean nowCharging = battery.isCharging();
         if (level < 0 || level > 100) {
-            BackgroundLogStore.append(this, "检测", source + "：异常电量值 " + level);
-            return;
+            throw new IllegalStateException("Invalid battery level " + level);
         }
 
         synchronized (stateLock) {
@@ -275,10 +342,16 @@ public class ReliableBatteryMonitorService extends Service {
     }
 
     private void processBatterySampleLocked(int level, boolean nowCharging, String source) {
+        long nowWall = System.currentTimeMillis();
+        long nowElapsed = SystemClock.elapsedRealtime();
+        long gapMs = lastSampleElapsed > 0 ? nowElapsed - lastSampleElapsed : 0L;
+
         currentLevel = level;
         charging = nowCharging;
         step = Prefs.getStep(this);
-        lastSampleAt = System.currentTimeMillis();
+        lastSampleAt = nowWall;
+        lastSampleElapsed = nowElapsed;
+        sampleSequence++;
         updateQuietPauseStateLocked();
 
         boolean alertsAllowed = Prefs.isEnabled(this) && !quietPaused;
@@ -302,17 +375,20 @@ public class ReliableBatteryMonitorService extends Service {
         BackgroundLogStore.append(
                 this,
                 "检测",
-                source
+                "#" + sampleSequence
+                        + " " + source
+                        + " | 距上次=" + (gapMs > 0 ? gapMs + "ms" : "首次")
                         + " | 电量=" + level + "%"
                         + " | 充电=" + (charging ? "是" : "否")
                         + " | 总开关=" + (Prefs.isEnabled(this) ? "开" : "关")
                         + " | 静音暂停=" + (quietPaused ? "是" : "否")
                         + " | 蓝牙联动=" + (Prefs.isBluetoothAutoEnabled(this) ? "开" : "关")
+                        + " | 系统伴侣=" + (CompanionWatchManager.isAssociated(this) ? "已关联" : "未关联")
                         + " | 下次提醒=" + (nextTarget > 0 ? nextTarget + "%" : "—")
         );
 
         acquireWakeLockLocked();
-        ensureMinutePollingLocked();
+        ensureWatchdogLocked();
         updateForegroundLocked();
     }
 
@@ -337,9 +413,9 @@ public class ReliableBatteryMonitorService extends Service {
         if (wakeLock != null && !wakeLock.isHeld()) {
             try {
                 wakeLock.acquire();
-                BackgroundLogStore.append(this, "服务", "已获取 partial wakelock，保证每分钟检测");
+                BackgroundLogStore.append(this, "服务", "已获取 partial wakelock");
             } catch (RuntimeException e) {
-                BackgroundLogStore.append(this, "服务", "获取 wakelock 失败：" + e.getClass().getSimpleName());
+                BackgroundLogStore.append(this, "服务", "获取 wakelock 失败：" + describeThrowable(e));
             }
         }
     }
@@ -402,8 +478,7 @@ public class ReliableBatteryMonitorService extends Service {
 
     private boolean hasBluetoothPermission() {
         return Build.VERSION.SDK_INT < 31
-                || checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)
-                == PackageManager.PERMISSION_GRANTED;
+                || checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED;
     }
 
     private void updateQuietPauseStateLocked() {
@@ -445,6 +520,7 @@ public class ReliableBatteryMonitorService extends Service {
 
     private void createChannels() {
         NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager == null) return;
         NotificationChannel monitor = new NotificationChannel(
                 CHANNEL_MONITOR, "电池监测服务", NotificationManager.IMPORTANCE_LOW);
         monitor.setSound(null, null);
@@ -481,7 +557,7 @@ public class ReliableBatteryMonitorService extends Service {
                 + " · " + (charging ? "充电中" : "未充电")
                 + " · 上次 " + sampleTime
                 + (quietPaused ? " · 提醒暂停" : "")
-                + (isWakeLockHeldLocked() ? " · 每分钟唤醒" : "");
+                + (isWakeLockHeldLocked() ? " · 双通道心跳" : "");
 
         return new Notification.Builder(this, CHANNEL_MONITOR)
                 .setSmallIcon(android.R.drawable.ic_lock_idle_charging)
@@ -495,7 +571,13 @@ public class ReliableBatteryMonitorService extends Service {
     }
 
     private void updateForegroundLocked() {
-        getSystemService(NotificationManager.class).notify(MONITOR_ID, buildForegroundNotificationLocked());
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager == null) return;
+        try {
+            manager.notify(MONITOR_ID, buildForegroundNotificationLocked());
+        } catch (RuntimeException e) {
+            BackgroundLogStore.append(this, "异常", "刷新常驻通知失败：" + describeThrowable(e));
+        }
     }
 
     private void notifyThreshold(int threshold, int observed) {
@@ -513,17 +595,31 @@ public class ReliableBatteryMonitorService extends Service {
     }
 
     private void sendAlertNotification(int id, String title, String text) {
-        PendingIntent open = PendingIntent.getActivity(
-                this, id, new Intent(this, DashboardActivity.class),
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        Notification notification = new Notification.Builder(this, CHANNEL_ALERT)
-                .setSmallIcon(android.R.drawable.ic_lock_idle_charging)
-                .setContentTitle(title)
-                .setContentText(text)
-                .setContentIntent(open)
-                .setAutoCancel(true)
-                .setCategory(Notification.CATEGORY_REMINDER)
-                .build();
-        getSystemService(NotificationManager.class).notify(id, notification);
+        try {
+            PendingIntent open = PendingIntent.getActivity(
+                    this, id, new Intent(this, DashboardActivity.class),
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            Notification notification = new Notification.Builder(this, CHANNEL_ALERT)
+                    .setSmallIcon(android.R.drawable.ic_lock_idle_charging)
+                    .setContentTitle(title)
+                    .setContentText(text)
+                    .setContentIntent(open)
+                    .setAutoCancel(true)
+                    .setCategory(Notification.CATEGORY_REMINDER)
+                    .build();
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            if (manager != null) manager.notify(id, notification);
+        } catch (RuntimeException e) {
+            BackgroundLogStore.append(this, "异常", "发送提醒失败：" + describeThrowable(e));
+        }
+    }
+
+    private static String describeThrowable(Throwable throwable) {
+        if (throwable == null) return "unknown";
+        String message = throwable.getMessage();
+        if (message == null || message.trim().isEmpty()) {
+            return throwable.getClass().getSimpleName();
+        }
+        return throwable.getClass().getSimpleName() + ": " + message;
     }
 }
