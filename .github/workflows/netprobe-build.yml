@@ -29,21 +29,21 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
           "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
 
-      - name: Restore fixed debug signing key
+      - name: Restore fixed public debug signing key
         run: |
-          mkdir -p "$HOME/.android"
+          mkdir -p "$RUNNER_TEMP/netprobe-signing"
           python3 - <<'PY'
           import base64, json, urllib.request, os
           url = 'https://api.github.com/repos/bumptech/glide/git/blobs/425f3d6a11b16ba70f68532876a6cce31e2a2bbd'
           with urllib.request.urlopen(url) as r:
               data = json.load(r)
           content = base64.b64decode(data['content'])
-          path = os.path.expanduser('~/.android/debug.keystore')
+          path = os.path.join(os.environ['RUNNER_TEMP'], 'netprobe-signing', 'debug.keystore')
           with open(path, 'wb') as f:
               f.write(content)
           print('fixed debug keystore bytes:', len(content))
           PY
-          keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | grep -E 'Owner:|SHA256:'
+          keytool -list -v -keystore "$RUNNER_TEMP/netprobe-signing/debug.keystore" -storepass android -alias androiddebugkey | grep -E 'Owner:|SHA256:'
 
       - uses: gradle/actions/setup-gradle@v4
         with:
@@ -53,10 +53,17 @@ jobs:
         working-directory: NetProbe
         run: gradle assembleDebug --stacktrace
 
-      - name: Rename and verify APK signature
+      - name: Sign and verify APK with fixed key
         run: |
-          cp NetProbe/app/build/outputs/apk/debug/app-debug.apk NetProbe-v1.2.0.apk
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs NetProbe-v1.2.0.apk
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          "$APKSIGNER" sign \
+            --ks "$RUNNER_TEMP/netprobe-signing/debug.keystore" \
+            --ks-key-alias androiddebugkey \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --out NetProbe-v1.2.0.apk \
+            NetProbe/app/build/outputs/apk/debug/app-debug.apk
+          "$APKSIGNER" verify --verbose --print-certs NetProbe-v1.2.0.apk
 
       - uses: actions/upload-artifact@v4
         with:
