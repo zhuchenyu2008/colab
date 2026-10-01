@@ -45,7 +45,7 @@ public final class NetworkTester {
             c = (HttpURLConnection) u.openConnection();
             c.setConnectTimeout(5000); c.setReadTimeout(7000); c.setInstanceFollowRedirects(true);
             c.setUseCaches(false); c.setRequestMethod("GET");
-            c.setRequestProperty("User-Agent", "NetProbe/1.1 Android");
+            c.setRequestProperty("User-Agent", "NetProbe/1.2 Android");
             c.setRequestProperty("Accept-Encoding", "identity");
             c.setRequestProperty("Cache-Control", "no-cache");
             c.setRequestProperty("Range", speed ? "bytes=0-" + (LIMIT - 1) : "bytes=0-0");
@@ -106,7 +106,7 @@ public final class NetworkTester {
 
     static String describeDns(Context context) {
         try {
-            ConnectivityManager cm = context.getSystemService(ConnectivityManager.class); Network n = cm.getActiveNetwork();
+            ConnectivityManager cm = context.getSystemService(ConnectivityManager.class); Network n=cm.getActiveNetwork();
             LinkProperties lp = cm.getLinkProperties(n); if (lp == null) return "--";
             StringBuilder s = new StringBuilder(); for (InetAddress a : lp.getDnsServers()) { if (s.length() > 0) s.append(", "); s.append(a.getHostAddress()); }
             if (Build.VERSION.SDK_INT >= 28 && lp.isPrivateDnsActive()) {
