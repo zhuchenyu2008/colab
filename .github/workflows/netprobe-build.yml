@@ -17,25 +17,49 @@ jobs:
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
+
       - name: Install Android API 36
         run: |
           SDKMANAGER=/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
           "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Restore fixed debug signing key
+        run: |
+          mkdir -p "$HOME/.android"
+          python3 - <<'PY'
+          import base64, json, urllib.request, os
+          url = 'https://api.github.com/repos/bumptech/glide/git/blobs/425f3d6a11b16ba70f68532876a6cce31e2a2bbd'
+          with urllib.request.urlopen(url) as r:
+              data = json.load(r)
+          content = base64.b64decode(data['content'])
+          path = os.path.expanduser('~/.android/debug.keystore')
+          with open(path, 'wb') as f:
+              f.write(content)
+          print('fixed debug keystore bytes:', len(content))
+          PY
+          keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | grep -E 'Owner:|SHA256:'
+
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.6.0'
+
       - name: Build APK
         working-directory: NetProbe
         run: gradle assembleDebug --stacktrace
-      - name: Rename APK
-        run: cp NetProbe/app/build/outputs/apk/debug/app-debug.apk NetProbe-debug-v1.1.0.apk
+
+      - name: Rename and verify APK signature
+        run: |
+          cp NetProbe/app/build/outputs/apk/debug/app-debug.apk NetProbe-v1.2.0.apk
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs NetProbe-v1.2.0.apk
+
       - uses: actions/upload-artifact@v4
         with:
-          name: NetProbe-debug-v1.1.0
-          path: NetProbe-debug-v1.1.0.apk
+          name: NetProbe-v1.2.0
+          path: NetProbe-v1.2.0.apk
           if-no-files-found: error
