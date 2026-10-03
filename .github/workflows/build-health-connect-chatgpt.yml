@@ -1,0 +1,104 @@
+name: Build Health Connect ChatGPT Bridge
+
+on:
+  push:
+    branches:
+      - health-connect-chatgpt-mvp
+    paths:
+      - 'health-connect-chatgpt/**'
+      - '.github/workflows/build-health-connect-chatgpt.yml'
+  pull_request:
+    paths:
+      - 'health-connect-chatgpt/**'
+      - '.github/workflows/build-health-connect-chatgpt.yml'
+  workflow_dispatch:
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      HEALTH_BRIDGE_SIGNING_KEYSTORE_BASE64: ${{ secrets.HEALTH_BRIDGE_SIGNING_KEYSTORE_BASE64 }}
+      HEALTH_BRIDGE_SIGNING_STORE_FILE: ${{ github.workspace }}/.ci-signing/health-connect-chatgpt.jks
+      HEALTH_BRIDGE_SIGNING_STORE_PASSWORD: ${{ secrets.HEALTH_BRIDGE_SIGNING_STORE_PASSWORD || 'healthbridgedev' }}
+      HEALTH_BRIDGE_SIGNING_KEY_ALIAS: healthchatbridge
+      HEALTH_BRIDGE_SIGNING_KEY_PASSWORD: ${{ secrets.HEALTH_BRIDGE_SIGNING_KEY_PASSWORD || 'healthbridgedev' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK
+        run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Restore stable development signing key
+        if: ${{ env.HEALTH_BRIDGE_SIGNING_KEYSTORE_BASE64 == '' }}
+        uses: actions/cache@v4
+        with:
+          path: .ci-signing/health-connect-chatgpt.jks
+          key: health-connect-chatgpt-signing-v1
+
+      - name: Prepare stable signing key
+        run: |
+          mkdir -p .ci-signing
+          if [ -n "$HEALTH_BRIDGE_SIGNING_KEYSTORE_BASE64" ]; then
+            echo "$HEALTH_BRIDGE_SIGNING_KEYSTORE_BASE64" | base64 --decode > "$HEALTH_BRIDGE_SIGNING_STORE_FILE"
+            echo "Using keystore supplied by GitHub Secret."
+          elif [ ! -s "$HEALTH_BRIDGE_SIGNING_STORE_FILE" ]; then
+            keytool -genkeypair -v \
+              -keystore "$HEALTH_BRIDGE_SIGNING_STORE_FILE" \
+              -storepass "$HEALTH_BRIDGE_SIGNING_STORE_PASSWORD" \
+              -keypass "$HEALTH_BRIDGE_SIGNING_KEY_PASSWORD" \
+              -alias "$HEALTH_BRIDGE_SIGNING_KEY_ALIAS" \
+              -keyalg RSA \
+              -keysize 3072 \
+              -validity 10000 \
+              -dname "CN=Health Connect ChatGPT Bridge, OU=Personal, O=zhuchenyu2008, L=Ningbo, ST=Zhejiang, C=CN"
+            echo "Generated stable development signing key; Actions Cache will reuse it."
+          else
+            echo "Reusing cached stable development signing key."
+          fi
+
+      - name: Print signing fingerprint
+        run: |
+          keytool -list -v \
+            -keystore "$HEALTH_BRIDGE_SIGNING_STORE_FILE" \
+            -storepass "$HEALTH_BRIDGE_SIGNING_STORE_PASSWORD" \
+            -alias "$HEALTH_BRIDGE_SIGNING_KEY_ALIAS" \
+            | tee signing-fingerprint.txt
+
+      - name: Build APK
+        run: gradle -p health-connect-chatgpt/android :app:assembleDebug --stacktrace
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthConnect-ChatGPT-Bridge-debug
+          path: |
+            health-connect-chatgpt/android/app/build/outputs/apk/debug/app-debug.apk
+            signing-fingerprint.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install server
+        run: pip install -e 'health-connect-chatgpt/server[test]'
+      - name: Run tests
+        run: pytest -q health-connect-chatgpt/server/tests
+      - name: Import smoke test
+        env:
+          HEALTH_DB: /tmp/health-smoke.db
+          INGEST_TOKEN: ci-ingest-token-01234567890123456789
+          MCP_TOKEN: ci-mcp-token-01234567890123456789012
+        run: python -c 'from health_bridge.app import app; print(type(app).__name__)'
