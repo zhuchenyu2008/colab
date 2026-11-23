@@ -17,6 +17,8 @@ public final class MainActivity extends Activity {
     private Uri photo,video;
     private TextView status,photoLabel,videoLabel,results;
     private Button analyzeButton, exportButton, modelButton;
+    private CheckBox nnapiToggle;
+    private boolean preferAccelerator = true;
     private SeekBar frameIntervalBar;
     private int frameInterval=5;
     private List<VideoAnalyzer.Segment> lastSegments=Collections.emptyList();
@@ -40,6 +42,12 @@ public final class MainActivity extends Activity {
         root.addView(button("选择本地视频",v->pick("video/*",102)));
         videoLabel=label("尚未选择",14,false);root.addView(videoLabel);
         root.addView(label("③ 扫描参数",18,true));
+        nnapiToggle = new CheckBox(this);
+        nnapiToggle.setText("硬件加速优先（NNAPI，可使用 GPU / NPU）");
+        nnapiToggle.setChecked(true);
+        nnapiToggle.setOnCheckedChangeListener((b,on)->preferAccelerator=on);
+        root.addView(nnapiToggle);
+        root.addView(label("若机型不支持模型硬件推理，会回退 CPU。分析后显示实际 NNAPI 算子执行记录；开启不保证一定更快。",12,false));
         final TextView intervalText=label("每 5 帧分析一次（默认沿用原项目）",14,false);
         root.addView(intervalText);
         frameIntervalBar=new SeekBar(this);frameIntervalBar.setMax(29);frameIntervalBar.setProgress(4);
@@ -84,6 +92,7 @@ public final class MainActivity extends Activity {
         runOnUiThread(()->{
             modelButton.setEnabled(!enabled);analyzeButton.setEnabled(!enabled);
             frameIntervalBar.setEnabled(!enabled);
+            nnapiToggle.setEnabled(!enabled);
             exportButton.setEnabled(!enabled && !lastSegments.isEmpty());
         });
     }
@@ -120,17 +129,24 @@ public final class MainActivity extends Activity {
             try {
                 ModelStore store=new ModelStore(this);store.ensure(this::update);
                 update("加载 InsightFace 检测和识别模型...");
-                try(FaceEngine engine=new FaceEngine(store.detector(),store.recognizer())){
+                long jobStart = android.os.SystemClock.elapsedRealtime();
+                try(FaceEngine engine=new FaceEngine(store.detector(),store.recognizer(),preferAccelerator,getCacheDir())){
                     Bitmap reference=readPhoto(photo);
                     List<FaceEngine.Face> q;
                     try { q=engine.analyze(reference); }finally{reference.recycle();}
                     if(q.isEmpty())throw new IllegalArgumentException("参考照片没有检测到可用人脸");
                     q.sort((a,b)->Float.compare(b.confidence,a.confidence));
-                    update("参考人脸已提取，开始视频分析...");
+                    update("参考人脸已提取，开始视频分析...\n"+engine.providerStatus());
                     VideoAnalyzer.Report report=new VideoAnalyzer(this).search(engine,video,q.get(0).embedding,
                             frameInterval,0.48f,this::update);
                     lastSegments=report.segments;
+                    String profile=engine.finishProfiling();
+                    long elapsed=android.os.SystemClock.elapsedRealtime()-jobStart;
                     StringBuilder out=new StringBuilder();
+                    out.append("总耗时 ").append(elapsed).append(" ms · 视频解码 ")
+                       .append(report.decodeMs).append(" ms · 模型推理 ")
+                       .append(report.inferenceMs).append(" ms。\n");
+                    out.append(engine.providerStatus()).append("\n").append(profile).append("\n\n");
                     out.append("已扫描 ").append(report.sampledFrames).append(" 帧，检测人脸 ").append(report.faceCount)
                             .append(" 次，超过阈值的帧内候选 ").append(report.rawHits).append(" 个。\n");
                     if(lastSegments.isEmpty())out.append("没有达到阈值的候选（不代表目标一定未出现）。");

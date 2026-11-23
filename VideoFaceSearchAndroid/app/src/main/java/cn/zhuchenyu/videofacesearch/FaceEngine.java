@@ -2,6 +2,9 @@
 package cn.zhuchenyu.videofacesearch;
 
 import android.graphics.*;
+import android.os.Build;
+import ai.onnxruntime.providers.NNAPIFlags;
+import java.io.*;
 import java.io.File;
 import java.nio.*;
 import java.util.*;
@@ -24,16 +27,114 @@ public final class FaceEngine implements AutoCloseable {
     private final OrtEnvironment env;
     private final OrtSession det, rec;
     private final String detInput, recInput;
+    private final boolean detNnapi, recNnapi;
+    private final String[] providerNotes = new String[2];
+    private boolean profileFinished = false;
+    private String profileStatus = "未读取推理性能记录";
+    private final File profileDir;
 
-    FaceEngine(File detector, File recognizer) throws Exception {
+    private static final class Prepared {
+        final OrtSession session; final boolean nnapi;
+        Prepared(OrtSession session, boolean nnapi) { this.session = session; this.nnapi = nnapi; }
+    }
+
+    FaceEngine(File detector, File recognizer, boolean preferAccelerator, File cacheDir) throws Exception {
         env = OrtEnvironment.getEnvironment();
-        OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
-        opts.setIntraOpNumThreads(Math.min(4, Runtime.getRuntime().availableProcessors()));
-        det = env.createSession(detector.getAbsolutePath(), opts);
-        rec = env.createSession(recognizer.getAbsolutePath(), opts);
+        profileDir = new File(cacheDir, "onnx-profiler");
+        if (!profileDir.exists()) profileDir.mkdirs();
+        Prepared d = openSession(detector, preferAccelerator, "detector", 0);
+        det = d.session;
+        detNnapi = d.nnapi;
+        Prepared r;
+        try {
+            r = openSession(recognizer, preferAccelerator, "recognizer", 1);
+        } catch (Exception e) {
+            det.close();
+            throw e;
+        }
+        rec = r.session;
+        recNnapi = r.nnapi;
         detInput = det.getInputNames().iterator().next();
         recInput = rec.getInputNames().iterator().next();
-        opts.close();
+    }
+
+    private Prepared openSession(File model, boolean preferAccelerator, String tag, int index) throws Exception {
+        // NNAPI dispatches eligible ops to Android device accelerators (GPU/NPU).
+        // Explicitly forbid nnapi-reference CPU, keeping unsupported ops on ORT CPU.
+        if (preferAccelerator && Build.VERSION.SDK_INT >= 29) {
+            try (OrtSession.SessionOptions options = new OrtSession.SessionOptions()) {
+                options.setIntraOpNumThreads(2);
+                options.addNnapi(EnumSet.of(NNAPIFlags.CPU_DISABLED));
+                enableProfile(options, tag);
+                OrtSession result = env.createSession(model.getAbsolutePath(), options);
+                providerNotes[index] = tag + ": NNAPI 已注册（实际硬件节点将在分析后确认）";
+                return new Prepared(result, true);
+            } catch (Exception e) {
+                providerNotes[index] = tag + ": NNAPI 初始化失败，已回退 CPU: " + e.getClass().getSimpleName();
+            }
+        } else if (preferAccelerator) {
+            providerNotes[index] = tag + ": 安卓版本不支持当前加速配置，回退 CPU";
+        } else {
+            providerNotes[index] = tag + ": 用户选择 CPU";
+        }
+        try (OrtSession.SessionOptions options = new OrtSession.SessionOptions()) {
+            options.setIntraOpNumThreads(Math.min(4, Runtime.getRuntime().availableProcessors()));
+            enableProfile(options, tag);
+            return new Prepared(env.createSession(model.getAbsolutePath(), options), false);
+        }
+    }
+
+    private void enableProfile(OrtSession.SessionOptions options, String tag) {
+        try {
+            options.enableProfiling(new File(profileDir, tag + "-" + System.currentTimeMillis()).getAbsolutePath());
+        } catch (Exception ignored) { /* inference remains usable even if profiling is unavailable */ }
+    }
+
+    public String providerStatus() {
+        return providerNotes[0] + "\n" + providerNotes[1];
+    }
+
+    public String finishProfiling() {
+        if (profileFinished) return profileStatus;
+        profileFinished = true;
+        int accelerationEvents = 0, cpuEvents = 0;
+        StringBuilder details = new StringBuilder();
+        for (int i=0; i<2; i++) {
+            OrtSession session = i==0 ? det : rec;
+            String tag = i==0 ? "检测" : "识别";
+            try {
+                String trace = session.endProfiling();
+                int hw=0,cpu=0;
+                if (trace != null && !trace.isEmpty()) {
+                    try (BufferedReader reader = new BufferedReader(new FileReader(trace))) {
+                        String line;
+                        while ((line=reader.readLine())!=null) {
+                            hw += count(line, "NNAPIExecutionProvider");
+                            cpu += count(line, "CPUExecutionProvider");
+                        }
+                    }
+                    new File(trace).delete();
+                }
+                accelerationEvents += hw; cpuEvents += cpu;
+                details.append(tag).append(": NNAPI ").append(hw).append(" / CPU ").append(cpu).append(" 个执行事件。");
+            } catch (Exception e) {
+                details.append(tag).append(": 运行分析不可用。");
+            }
+            if(i==0)details.append("\n");
+        }
+        if(accelerationEvents>0) {
+            profileStatus = "已确认 NNAPI 承接部分算子（但无法仅凭此确定是 GPU 还是 NPU）。\n" + details;
+        } else if (detNnapi || recNnapi) {
+            profileStatus = "已启用 NNAPI，但未记录到 NNAPI 执行算子；可能实际回退 CPU。\n" + details;
+        } else {
+            profileStatus = "本次使用 ORT CPU 推理。\n" + details;
+        }
+        return profileStatus;
+    }
+    private static int count(String text, String needle) {
+        int n=0, pos=0;
+        while((pos=text.indexOf(needle,pos))>=0){n++;pos+=needle.length();}
+        return n;
     }
 
     public List<Face> analyze(Bitmap original) throws Exception {

@@ -33,3 +33,14 @@ Install the output `VideoFaceSearchAndroid/app/build/outputs/apk/debug/app-debug
 - Not validated on physical OnePlus 12 hardware yet.
 
 Source algorithm inspiration: InsightFace SCRFD and ArcFace inference, original DolphinBit application pipeline. This project does not contain third-party pretrained weights.
+
+## v0.2.0 Android hardware acceleration update
+
+- On-device **NNAPI** Execution Provider is requested by default for both SCRFD and ArcFace ONNX models.
+- NNAPI CPU fallback is disabled, but unsupported graph nodes can still execute in ONNX Runtime's CPU provider.
+- A user toggle allows CPU-only mode for baseline comparisons and workarounds.
+- Records execution-provider events via ONNX Runtime profiling; **hardware assignment is verified by trace, not merely provider registration**. NNAPI does not identify whether the actual target is Adreno GPU or Snapdragon NPU.
+- For high-resolution sources, reduces decoded bitmap resolution to a 960-pixel maximum dimension, then runs the existing 640x640 detector. Video decoding itself remains Android MediaMetadataRetriever based.
+- Adds decode, model inference, and total elapsed time readouts.
+- This is **not a direct Vulkan GPU backend**; actual acceleration availability is dependent on Android NNAPI drivers and compatibility with model operators. If traces show zero NNAPI ops, do not claim GPU acceleration.
+- v0.1.0 and v0.2.0 are GitHub Actions *debug-signed* using runner-created keys. Android may require uninstalling old v0.1.0 before installing v0.2.0 due to signing-key mismatch; this removes the original app's cached model.
