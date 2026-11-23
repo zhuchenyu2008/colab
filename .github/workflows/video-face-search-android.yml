@@ -40,7 +40,7 @@ jobs:
           ls -lh VideoFaceSearch-Android-v0.2.0.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: VideoFaceSearch-Android-v0.1.0
-          path: VideoFaceSearch-Android-v0.1.0.apk
+          name: VideoFaceSearch-Android-v0.2.0
+          path: VideoFaceSearch-Android-v0.2.0.apk
           if-no-files-found: error
           retention-days: 30
