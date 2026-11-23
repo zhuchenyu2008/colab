@@ -32,7 +32,7 @@ jobs:
       - name: Install Android NDK and CMake
         run: |
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          "$SDKMANAGER" "ndk;27.2.12479018" "cmake;3.22.1"
+          "$SDKMANAGER" "ndk;30.0.16248370" "cmake;3.22.1"
       - name: Get ncnn Vulkan SDK and SCRFD-10G model
         run: |
           set -euo pipefail
