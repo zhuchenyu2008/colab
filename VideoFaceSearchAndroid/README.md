@@ -44,3 +44,14 @@ Source algorithm inspiration: InsightFace SCRFD and ArcFace inference, original 
 - Adds decode, model inference, and total elapsed time readouts.
 - This is **not a direct Vulkan GPU backend**; actual acceleration availability is dependent on Android NNAPI drivers and compatibility with model operators. If traces show zero NNAPI ops, do not claim GPU acceleration.
 - v0.1.0 and v0.2.0 are GitHub Actions *debug-signed* using runner-created keys. Android may require uninstalling old v0.1.0 before installing v0.2.0 due to signing-key mismatch; this removes the original app's cached model.
+
+## v0.3.0: native Vulkan SCRFD detector
+
+- Adds a real Vulkan GPU path for SCRFD-10G face detection using Tencent ncnn and the official `nihui/ncnn-android-scrfd` converted 10g_kps weights.
+- Uses Android NDK JNI for the ncnn GPU detector; returns bounding boxes and five facial landmarks, then reuses the existing Java 112x112 ArcFace alignment and ONNX embedding model.
+- **Only face detection** is Vulkan GPU accelerated. ArcFace recognition, frame decoding, and some postprocessing remain CPU, so overall processing time may still be significant. Actual performance on OnePlus 12 is not measured yet.
+- If ncnn Vulkan cannot initialize, automatically falls back to ONNX Runtime NNAPI/CPU path.
+- ncnn Vulkan binaries and detection weights are retrieved during GitHub Actions build, not committed into source. See the CI workflow for exact upstream URLs.
+- Torch/ONNX input preprocessing and model variants may vary; do not assume scores exactly match v0.2.0. Validate with authorized test data.
+- Build downloads 40MB ncnn Android Vulkan SDK and ~8MB SCRFD model; NDK and CMake required.
+- Debug APK signing may differ across builds; uninstall may be required, clearing the previously downloaded ArcFace pack.

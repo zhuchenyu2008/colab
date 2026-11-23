@@ -27,6 +27,7 @@ public final class FaceEngine implements AutoCloseable {
     private final OrtEnvironment env;
     private final OrtSession det, rec;
     private final String detInput, recInput;
+    private final GpuFaceDetector vulkan;
     private final boolean detNnapi, recNnapi;
     private final String[] providerNotes = new String[2];
     private boolean profileFinished = false;
@@ -38,23 +39,41 @@ public final class FaceEngine implements AutoCloseable {
         Prepared(OrtSession session, boolean nnapi) { this.session = session; this.nnapi = nnapi; }
     }
 
-    FaceEngine(File detector, File recognizer, boolean preferAccelerator, File cacheDir) throws Exception {
+    FaceEngine(File detector, File recognizer, boolean preferAccelerator, File cacheDir, android.content.res.AssetManager assets) throws Exception {
         env = OrtEnvironment.getEnvironment();
         profileDir = new File(cacheDir, "onnx-profiler");
         if (!profileDir.exists()) profileDir.mkdirs();
-        Prepared d = openSession(detector, preferAccelerator, "detector", 0);
-        det = d.session;
-        detNnapi = d.nnapi;
+        GpuFaceDetector gpu = null;
+        if (preferAccelerator) {
+            try {
+                gpu = new GpuFaceDetector(assets);
+                if (!gpu.isReady()) {
+                    providerNotes[0] = "检测 Vulkan 不可用，回退 ONNX Runtime";
+                    gpu.close();
+                    gpu = null;
+                }
+            } catch (Throwable e) {
+                providerNotes[0] = "检测 Vulkan 加载失败，回退 ONNX Runtime: " + e.getClass().getSimpleName();
+                if (gpu != null) gpu.close();
+                gpu = null;
+            }
+        }
+        vulkan = gpu;
+        Prepared d = gpu == null ? openSession(detector, preferAccelerator, "detector", 0) : null;
+        det = d == null ? null : d.session;
+        detNnapi = d != null && d.nnapi;
+        if (gpu != null) providerNotes[0] = "检测: ncnn Vulkan GPU（已检测到 Vulkan GPU 并加载 SCRFD-10G 模型）";
         Prepared r;
         try {
-            r = openSession(recognizer, preferAccelerator, "recognizer", 1);
+            r = openSession(recognizer, gpu == null && preferAccelerator, "recognizer", 1);
         } catch (Exception e) {
-            det.close();
+            if (det != null) det.close();
+            if (gpu != null) gpu.close();
             throw e;
         }
         rec = r.session;
         recNnapi = r.nnapi;
-        detInput = det.getInputNames().iterator().next();
+        detInput = det == null ? "" : det.getInputNames().iterator().next();
         recInput = rec.getInputNames().iterator().next();
     }
 
@@ -101,6 +120,10 @@ public final class FaceEngine implements AutoCloseable {
         StringBuilder details = new StringBuilder();
         for (int i=0; i<2; i++) {
             OrtSession session = i==0 ? det : rec;
+            if (session == null && i==0 && vulkan != null) {
+                details.append("检测: ncnn Vulkan GPU 已启用，不经过 ORT 记录事件。\n");
+                continue;
+            }
             String tag = i==0 ? "检测" : "识别";
             try {
                 String trace = session.endProfiling();
@@ -122,7 +145,9 @@ public final class FaceEngine implements AutoCloseable {
             }
             if(i==0)details.append("\n");
         }
-        if(accelerationEvents>0) {
+        if(vulkan != null) {
+            profileStatus = "已启用 ncnn Vulkan GPU 人脸检测；ArcFace 特征提取仍在 ONNX Runtime。\n" + details;
+        } else if(accelerationEvents>0) {
             profileStatus = "已确认 NNAPI 承接部分算子（但无法仅凭此确定是 GPU 还是 NPU）。\n" + details;
         } else if (detNnapi || recNnapi) {
             profileStatus = "已启用 NNAPI，但未记录到 NNAPI 执行算子；可能实际回退 CPU。\n" + details;
@@ -148,10 +173,16 @@ public final class FaceEngine implements AutoCloseable {
         canvas.drawColor(Color.BLACK);
         canvas.drawBitmap(original, null, new Rect(0,0,sw,sh), new Paint(Paint.FILTER_BITMAP_FLAG));
         List<Candidate> candidates;
-        try (OnnxTensor tensor = imageTensor(input, DET, 128f);
-             OrtSession.Result output = det.run(Collections.singletonMap(detInput, tensor))) {
-            candidates = decode(output, scale, ow, oh);
-        } finally { input.recycle(); }
+        if (vulkan != null) {
+            input.recycle();
+            // The ncnn backend prepares its own 640px input and outputs source-image coordinates.
+            candidates = vulkanCandidates(original);
+        } else {
+            try (OnnxTensor tensor = imageTensor(input, DET, 128f);
+                 OrtSession.Result output = det.run(Collections.singletonMap(detInput, tensor))) {
+                candidates = decode(output, scale, ow, oh);
+            } finally { input.recycle(); }
+        }
         ArrayList<Face> faces = new ArrayList<>();
         for (Candidate c : candidates) {
             Bitmap crop = align(original, c.landmarks);
@@ -170,6 +201,17 @@ public final class FaceEngine implements AutoCloseable {
         }
         return faces;
     }
+    private List<Candidate> vulkanCandidates(Bitmap original) {
+        float[] packed = vulkan.detect(original);
+        ArrayList<Candidate> faces = new ArrayList<>();
+        for (int i=0; i+14<packed.length; i+=15) {
+            float[] box=Arrays.copyOfRange(packed,i+1,i+5);
+            float[] landmarks=Arrays.copyOfRange(packed,i+5,i+15);
+            faces.add(new Candidate(box,landmarks,packed[i]));
+        }
+        return faces;
+    }
+
     public static float cosine(float[] a, float[] b) {
         if (a.length != b.length) return -1f;
         float s=0;
@@ -269,5 +311,5 @@ public final class FaceEngine implements AutoCloseable {
         canvas.drawBitmap(src,transform,new Paint(Paint.FILTER_BITMAP_FLAG));
         return face;
     }
-    @Override public void close() throws Exception { det.close();rec.close(); }
+    @Override public void close() throws Exception { if(det!=null)det.close();rec.close();if(vulkan!=null)vulkan.close(); }
 }

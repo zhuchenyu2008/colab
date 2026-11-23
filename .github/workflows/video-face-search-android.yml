@@ -29,6 +29,22 @@ jobs:
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
           "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
+      - name: Install Android NDK and CMake
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          "$SDKMANAGER" "ndk;27.2.12479018" "cmake;3.22.1"
+      - name: Get ncnn Vulkan SDK and SCRFD-10G model
+        run: |
+          set -euo pipefail
+          JNI_DIR="VideoFaceSearchAndroid/app/src/main/cpp"
+          ASSET_DIR="VideoFaceSearchAndroid/app/src/main/assets"
+          mkdir -p "$JNI_DIR" "$ASSET_DIR"
+          curl -fL --retry 3 --connect-timeout 20 -o /tmp/ncnn-vulkan.zip "https://github.com/Tencent/ncnn/releases/download/20261020/ncnn-20261020-android-vulkan.zip"
+          unzip -q /tmp/ncnn-vulkan.zip -d "$JNI_DIR"
+          for f in scrfd_10g_kps-opt2.param scrfd_10g_kps-opt2.bin; do
+            curl -fL --retry 3 --connect-timeout 20 -o "$ASSET_DIR/$f" "https://raw.githubusercontent.com/nihui/ncnn-android-scrfd/master/app/src/main/assets/$f"
+          done
+          test -f "$ASSET_DIR/scrfd_10g_kps-opt2.bin"
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
@@ -36,11 +52,11 @@ jobs:
         run: gradle -p VideoFaceSearchAndroid :app:assembleDebug --stacktrace
       - name: Package APK
         run: |
-          cp VideoFaceSearchAndroid/app/build/outputs/apk/debug/app-debug.apk VideoFaceSearch-Android-v0.2.0.apk
-          ls -lh VideoFaceSearch-Android-v0.2.0.apk
+          cp VideoFaceSearchAndroid/app/build/outputs/apk/debug/app-debug.apk VideoFaceSearch-Android-v0.3.0.apk
+          ls -lh VideoFaceSearch-Android-v0.3.0.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: VideoFaceSearch-Android-v0.2.0
-          path: VideoFaceSearch-Android-v0.2.0.apk
+          name: VideoFaceSearch-Android-v0.3.0
+          path: VideoFaceSearch-Android-v0.3.0.apk
           if-no-files-found: error
           retention-days: 30

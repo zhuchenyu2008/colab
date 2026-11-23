@@ -43,11 +43,11 @@ public final class MainActivity extends Activity {
         videoLabel=label("尚未选择",14,false);root.addView(videoLabel);
         root.addView(label("③ 扫描参数",18,true));
         nnapiToggle = new CheckBox(this);
-        nnapiToggle.setText("硬件加速优先（NNAPI，可使用 GPU / NPU）");
+        nnapiToggle.setText("Vulkan GPU 检测优先（不可用时回退 CPU）");
         nnapiToggle.setChecked(true);
         nnapiToggle.setOnCheckedChangeListener((b,on)->preferAccelerator=on);
         root.addView(nnapiToggle);
-        root.addView(label("若机型不支持模型硬件推理，会回退 CPU。分析后显示实际 NNAPI 算子执行记录；开启不保证一定更快。",12,false));
+        root.addView(label("优先使用 ncnn Vulkan SCRFD 人脸检测，ArcFace 使用 ONNX Runtime；不可用时回退旧版模式。不是全流程 GPU。",12,false));
         final TextView intervalText=label("每 5 帧分析一次（默认沿用原项目）",14,false);
         root.addView(intervalText);
         frameIntervalBar=new SeekBar(this);frameIntervalBar.setMax(29);frameIntervalBar.setProgress(4);
@@ -130,7 +130,7 @@ public final class MainActivity extends Activity {
                 ModelStore store=new ModelStore(this);store.ensure(this::update);
                 update("加载 InsightFace 检测和识别模型...");
                 long jobStart = android.os.SystemClock.elapsedRealtime();
-                try(FaceEngine engine=new FaceEngine(store.detector(),store.recognizer(),preferAccelerator,getCacheDir())){
+                try(FaceEngine engine=new FaceEngine(store.detector(),store.recognizer(),preferAccelerator,getCacheDir(),getAssets())){
                     Bitmap reference=readPhoto(photo);
                     List<FaceEngine.Face> q;
                     try { q=engine.analyze(reference); }finally{reference.recycle();}
