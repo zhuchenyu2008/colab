@@ -17,7 +17,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     packaging { jniLibs { useLegacyPackaging = true } }
-    ndkVersion = "27.2.12479018"
+    ndkVersion = "30.0.16248370"
     externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" } }
 }
 dependencies {
