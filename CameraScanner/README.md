@@ -6,3 +6,6 @@ Build with Gradle 8.11.1/JDK17/API35. GitHub Actions produces a release APK with
 
 ## v1.0.1
 RTSP TCP-open evidence now remains visible independently of protocol handshake; scans include 8554 and 10554 in quick mode; wider /23 coverage, dual-format RTSP OPTIONS, longer timeouts, and observable per-scan TCP counters. No credentials are ever requested. Scores still represent heuristic rules only.
+
+## v1.0.2
+Improved Wi-Fi route selection and VPN-aware network binding; faster and deeper scan have explicit ranges; additional potential RTSP ports; visible IP, gateway, port list, TCP attempts and outcomes in the app; avoids cancelling active scans when the activity temporarily moves off screen. On current firmware local network access may be filtered; report will explain zero-response scans. No credentials, no cloud.
