@@ -12,3 +12,6 @@ Improved Wi-Fi route selection and VPN-aware network binding; faster and deeper 
 
 ## v1.0.3
 Addresses universal socket failures: records actual exception type/message and transport stage, tries a regular network route when Wi-Fi-bound sockets cannot connect, exposes VPN routing and exception diagnostics in-app and JSON exports. Still needs real device verification.
+
+## v1.0.4
+**Security and accuracy correction**: removed the unbound/default-network fallback that fed every local IP through VPN traffic interception and produced nonsensical port-open results. Explicit Wi-Fi connection preflight fails closed upon EPERM; shows a clear VPN/per-app exclusion remedy; no invented camera candidates. Only ONVIF video devices, RTSP protocol responses and mDNS video-service discoveries count as confirmed. Open TCP ports alone are not camera detections. Requires physical Wi-Fi connectivity, and may require excluding this app from a VPN or disabling 'Block connections without VPN'. Not tested on a real device.
