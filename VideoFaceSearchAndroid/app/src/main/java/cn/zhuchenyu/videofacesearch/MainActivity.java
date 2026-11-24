@@ -38,10 +38,18 @@ public final class MainActivity extends Activity {
         root.addView(label("① 选择参考人脸",18,true));
         root.addView(button("选择参考照片",v->pick("image/*",101)));
         photoLabel=label("尚未选择",14,false);root.addView(photoLabel);
-        root.addView(label("② 选择 10–30 秒视频",18,true));
+        root.addView(label("② 实时摄像头（新增）",18,true));
+        root.addView(button("打开实时监测 · 自动调节分析频率",v->{
+            Intent intent=new Intent(this, LiveCameraActivity.class);
+            if(photo!=null)intent.putExtra("reference_uri",photo.toString());
+            intent.putExtra("use_accelerator",preferAccelerator);
+            startActivity(intent);
+        }));
+        root.addView(label("默认每5个摄像头帧分析一次，手机忙时自动增加间隔；只在前台运行，画面不录制或上传。",12,false));
+        root.addView(label("③ 选择 10–30 秒视频",18,true));
         root.addView(button("选择本地视频",v->pick("video/*",102)));
         videoLabel=label("尚未选择",14,false);root.addView(videoLabel);
-        root.addView(label("③ 扫描参数",18,true));
+        root.addView(label("④ 扫描参数",18,true));
         nnapiToggle = new CheckBox(this);
         nnapiToggle.setText("Vulkan GPU 人脸检测与 ArcFace 优先（不可用时回退 CPU）");
         nnapiToggle.setChecked(true);

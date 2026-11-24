@@ -79,3 +79,13 @@ Source algorithm inspiration: InsightFace SCRFD and ArcFace inference, original 
 - Converts/bundles the FP32 ArcFace model in the APK at build time. Expect significantly larger APK size, first model download is still the original buffalo_l pack for fallback.
 - Fixed signing is unchanged. To install over v0.5.0 without uninstalling, configure `VFS_SIGNING_KEYSTORE_B64` and `VFS_SIGNING_PASSWORD` repository Secrets with the original v0.5.0 signing backup. Without them CI will publish unsigned artifacts only, not a new random signature.
 - 17-second processing target for a 17-second input is **not guaranteed**; verify under the same phone and test video, compare threshold scores and false matches.
+
+## v0.7.0: real-time camera preview (adaptive sample interval)
+
+- Adds a front-of-screen CameraX mode using PreviewView and ImageAnalysis STRATEGY_KEEP_ONLY_LATEST, default rear camera.
+- Starts at **1 analysis per 5 delivered camera frames**. Backpressure never builds an inference queue. Raises interval automatically to 6–60 frames if inference duration exceeds budget; decreases slowly toward 5 after sustained headroom. Never lowers recognition threshold or replaces R50/SCRFD models.
+- Shows observed camera FPS, current interval, analyzed FPS, last inference latency, dropped busy frames, and candidate score. Camera preview stays active while inference runs.
+- No continuous recording, frame uploads, background camera service, or persistent face storage in this mode.
+- Reference photo can be chosen from live mode or inherited from the file search page. Inference runs on background single-thread executor; frame conversion/closing run on separate CameraX analyzer executor. GPU model stays loaded for the session, and is closed on stop. The UI does not assert an identity match; candidates require human review.
+- Preserves offline file search. v0.6.0 certificate and application ID remain unchanged, release versionCode increments to 7. Same pinned signing key is required for update-over-install.
+- Device-level camera and ONNX/NCNN resource compatibility and thermal behavior need a physical OnePlus 12 test. The offline 6 FPS benchmark does not guarantee 6 FPS in a crowded live scene.
