@@ -98,9 +98,9 @@ public class MainActivity extends Activity {
     @Override protected void onDestroy(){halt();super.onDestroy();}
     private static class Scope{
         final Network net;final long ip,low,high;final int prefix,actualPrefix;
-        Scope(Network n,long i,int p){net=n;ip=i;actualPrefix=p;prefix=Math.max(24,p);long mask=(0xffffffffL<<(32-prefix))&0xffffffffL;low=ip&mask;high=low|(~mask&0xffffffffL);}
+        Scope(Network n,long i,int p){net=n;ip=i;actualPrefix=p;prefix=Math.max(23,p);long mask=(0xffffffffL<<(32-prefix))&0xffffffffL;low=ip&mask;high=low|(~mask&0xffffffffL);}
         boolean contains(String a){try{long x=number(InetAddress.getByName(a));return x>low&&x<high&&x!=ip;}catch(Exception e){return false;}}
-        String label(){return address(low)+"/"+prefix+(actualPrefix<24?"（大网段仅扫描当前 /24）":"");}
+        String label(){return address(low)+"/"+prefix+(actualPrefix<23?"（大网段仅扫描当前 /23）":"");}
     }
     private static long number(InetAddress a){byte[] b=a.getAddress();if(b.length!=4)throw new IllegalArgumentException();long x=0;for(byte v:b)x=(x<<8)|(v&255);return x;}
     private static String address(long i){return ((i>>24)&255)+"."+((i>>16)&255)+"."+((i>>8)&255)+"."+(i&255);}
@@ -121,14 +121,17 @@ public class MainActivity extends Activity {
         final String ip;final Set<String> evidence=new ConcurrentSkipListSet<>();final Set<Integer> ports=new ConcurrentSkipListSet<>();
         volatile boolean onvif,rtsp,mdns,vendor,ssdp;
         Device(String a){ip=a;}
-        int score(){return onvif?95:rtsp?(vendor?80:50):mdns?(vendor?75:45):vendor?40:ssdp?30:0;}
-        String type(){return onvif?"ONVIF 视频设备":score()>=70?"高度疑似摄像头":score()>0?"待确认视频/网络设备":"其他响应设备";}
+        boolean mediaPort(){return ports.contains(554)||ports.contains(8554)||ports.contains(10554)||ports.contains(8555);}
+        int score(){return onvif?95:rtsp?85:mdns?70:mediaPort()?(vendor?60:35):vendor?40:ssdp?30:0;}
+        String type(){return onvif?"ONVIF 视频设备":rtsp?"已确认 RTSP 服务":mdns?"mDNS 视频服务":mediaPort()?"视频常用端口开放（待确认）":score()>0?"疑似网络设备":"其他响应设备";}
     }
     private static class Session{
         final Scope sc;final boolean deep;final AtomicBoolean cancelled=new AtomicBoolean();
-        final ExecutorService pool=Executors.newFixedThreadPool(24);
+        final ExecutorService pool=Executors.newFixedThreadPool(48);
         final ConcurrentHashMap<String,Device> devices=new ConcurrentHashMap<>();
-        final AtomicInteger done=new AtomicInteger();int total;final List<String> notes=Collections.synchronizedList(new ArrayList<>());
+        final AtomicInteger done=new AtomicInteger();
+        final AtomicInteger attempts=new AtomicInteger(),open=new AtomicInteger(),timeouts=new AtomicInteger(),refused=new AtomicInteger(),other=new AtomicInteger();
+        int total;final List<String> notes=Collections.synchronizedList(new ArrayList<>());
         Session(Scope s,boolean d){sc=s;deep=d;}
         Device get(String ip){return devices.computeIfAbsent(ip,Device::new);}
     }
@@ -141,7 +144,7 @@ public class MainActivity extends Activity {
             Future<?> ssdp=s.pool.submit(()->udpDiscovery(s,false));
             Future<?> mdns=s.pool.submit(()->mdnsDiscovery(s));
             ArrayList<Future<?>> jobs=new ArrayList<>();
-            s.total=(int)(s.sc.high-s.sc.low-2);
+            s.total=(int)(s.sc.high-s.sc.low-1);
             for(long ip=s.sc.low+1;ip<s.sc.high&&!s.cancelled.get();ip++){
                 if(ip==s.sc.ip)continue;String addr=address(ip);
                 jobs.add(s.pool.submit(()->{try{probe(s,addr);}finally{int x=s.done.incrementAndGet();if(x%12==0||x==s.total)ui.post(()->render(s,false));}}));
@@ -152,23 +155,55 @@ public class MainActivity extends Activity {
         finally{if(lock!=null&&lock.isHeld())lock.release();s.pool.shutdownNow();ui.post(()->finish(s));}
     }
     private void probe(Session s,String ip){
-        int[] ports=s.deep?new int[]{554,8554,80,443,8080,8000}:new int[]{554,80,443};
+        // A connectable video port remains visible even if the camera does not answer OPTIONS.
+        int[] ports=s.deep?new int[]{554,8554,10554,8555,80,443,8080,8000,8899}:new int[]{554,8554,10554,80,443};
         for(int port:ports){
             if(s.cancelled.get()||Thread.currentThread().isInterrupted())return;
+            s.attempts.incrementAndGet();
             try(Socket sock=s.sc.net.getSocketFactory().createSocket()){
-                sock.connect(new InetSocketAddress(ip,port),s.deep?420:220);
-                sock.setSoTimeout(s.deep?850:420);
+                sock.connect(new InetSocketAddress(ip,port),s.deep?650:420);
+                s.open.incrementAndGet();
+                sock.setSoTimeout(s.deep?1200:850);
                 Device d=s.get(ip);d.ports.add(port);
-                if(port==554||port==8554){
-                    String reply=exchange(sock,"OPTIONS * RTSP/1.0\r\nCSeq: 1\r\nUser-Agent: CameraScanner/1.0\r\n\r\n");
-                    if(reply.matches("(?s)^RTSP/\\d+\\.\\d+ \\d{3}.*")){d.rtsp=true;d.evidence.add("RTSP 协议响应："+firstLine(reply));}
-                    else d.evidence.add("流媒体常用端口 "+port+" 开放（未验证协议）");
-                } else if(port==80||port==8080){
-                    String reply=exchange(sock,"HEAD / HTTP/1.1\r\nHost: "+ip+"\r\nConnection: close\r\nUser-Agent: CameraScanner/1.0\r\n\r\n");
-                    if(reply.startsWith("HTTP/")){d.evidence.add("HTTP "+port+"："+firstLine(reply));markVendor(d,reply);}
-                } else d.evidence.add("TCP "+port+" 开放（仅端口证据）");
-            }catch(IOException|RuntimeException ignored){}
+                if(port==554||port==8554||port==10554||port==8555){
+                    // Preserve the TCP evidence first; RTSP auth or nonstandard OPTIONS cannot hide it.
+                    d.evidence.add("TCP "+port+" 可连接；可能是 RTSP，等待协议确认");
+                    try{
+                        String reply=exchange(sock,"OPTIONS rtsp://"+ip+":"+port+"/ RTSP/1.0\r\nCSeq: 1\r\nUser-Agent: CameraScanner/1.0\r\n\r\n");
+                        if(isRtsp(reply)){
+                            d.rtsp=true;d.evidence.add("RTSP 协议已确认："+firstLine(reply));
+                        }else{
+                            // Some older cameras only support the asterisk form of OPTIONS.
+                            String second=tryAlternativeRtsp(s,ip,port);
+                            if(isRtsp(second)){d.rtsp=true;d.evidence.add("RTSP 协议已确认："+firstLine(second));}
+                            else if(!reply.isEmpty())d.evidence.add("非标准协议响应："+firstLine(reply));
+                        }
+                    }catch(IOException|RuntimeException e){
+                        d.evidence.add("视频端口已开放，但 RTSP 握手失败："+e.getClass().getSimpleName());
+                    }
+                }else if(port==80||port==8080||port==8000||port==8899){
+                    d.evidence.add("HTTP 常用端口 "+port+" 可连接");
+                    try{
+                        String reply=exchange(sock,"HEAD / HTTP/1.1\r\nHost: "+ip+"\r\nConnection: close\r\nUser-Agent: CameraScanner/1.0\r\n\r\n");
+                        if(reply.startsWith("HTTP/")){d.evidence.add("HTTP "+port+"："+firstLine(reply));markVendor(d,reply);}
+                    }catch(IOException ignored){}
+                }else d.evidence.add("TCP "+port+" 可连接（仅端口证据）");
+            }catch(SocketTimeoutException e){s.timeouts.incrementAndGet();}
+            catch(ConnectException e){s.refused.incrementAndGet();}
+            catch(SecurityException e){s.notes.add("本地网络连接受到系统权限限制");return;}
+            catch(IOException|RuntimeException e){s.other.incrementAndGet();}
         }
+    }
+    private static boolean isRtsp(String response){
+        return response!=null && response.matches("(?is)^\\s*RTSP/\\d+\\.\\d+\\s+\\d{3}.*");
+    }
+    private String tryAlternativeRtsp(Session s,String ip,int port){
+        if(s.cancelled.get())return "";
+        try(Socket sock=s.sc.net.getSocketFactory().createSocket()){
+            sock.connect(new InetSocketAddress(ip,port),900);
+            sock.setSoTimeout(1000);
+            return exchange(sock,"OPTIONS * RTSP/1.0\r\nCSeq: 2\r\nUser-Agent: CameraScanner/1.0\r\n\r\n");
+        }catch(Exception e){return "";}
     }
     private static String exchange(Socket s,String request)throws IOException{
         s.getOutputStream().write(request.getBytes(StandardCharsets.US_ASCII));s.getOutputStream().flush();
@@ -249,8 +284,13 @@ public class MainActivity extends Activity {
         List<Device> list=sorted(s);long candidates=list.stream().filter(d->d.score()>0).count();
         counts.setText(list.size()+" 个已发现 · "+candidates+" 个候选");
         progress.setProgress(complete&&!s.cancelled.get()?100:Math.min(99,100*s.done.get()/Math.max(1,s.total)));
-        if(!complete)status.setText("服务探测 "+s.done.get()+" / "+s.total+" · "+(s.deep?"深度":"快速")+"模式");
+        if(!complete)status.setText("检测 "+s.done.get()+" / "+s.total+" 个 IP · "+(s.deep?"深度":"快速")+"模式");
+        if(complete)status.setText("扫描结束 · TCP 已连接 "+s.open.get()+" 次 · 超时 "+s.timeouts.get()+" 次");
         results.removeAllViews();
+        if(complete){
+            TextView diag=text("扫描网段："+s.sc.label()+"\n检测 IP："+s.done.get()+"/"+s.total+" · TCP 尝试："+s.attempts.get()+" · 成功："+s.open.get()+"\n连接超时："+s.timeouts.get()+" · 拒绝："+s.refused.get()+" · 其他错误："+s.other.get()+"\n检测端口："+(s.deep?"554,8554,10554,8555,80,443,8080,8000,8899":"554,8554,10554,80,443")+"\n提示：端口开放≠已确认摄像头。网络隔离、非标准端口仍会造成漏检。",12,MUTED,false);
+            diag.setPadding(dp(8),dp(8),dp(8),dp(12));results.addView(diag);
+        }
         if(list.isEmpty())results.addView(text(complete?"未发现响应设备；网络隔离或设备休眠可能造成漏检。":"正在等待设备响应…",14,MUTED,false));
         for(Device d:list){
             LinearLayout card=new LinearLayout(this);card.setOrientation(1);card.setPadding(dp(12),dp(10),dp(12),dp(10));card.setBackground(shape(PANEL,12));
@@ -265,7 +305,7 @@ public class MainActivity extends Activity {
         render(s,true);List<Device> list=sorted(s);Set<String> now=new HashSet<>();JSONArray records=new JSONArray();
         try{
             for(Device d:list){if(d.score()>0)now.add(d.ip);JSONObject j=new JSONObject();j.put("ip",d.ip);j.put("type",d.type());j.put("ruleScore",d.score());j.put("evidence",new JSONArray(d.evidence));j.put("ports",new JSONArray(d.ports));records.put(j);}
-            JSONObject report=new JSONObject();report.put("scope",s.sc.label());report.put("timestamp",System.currentTimeMillis());report.put("cancelled",s.cancelled.get());report.put("devices",records);report.put("notes",new JSONArray(s.notes));lastJson=report.toString(2);
+            JSONObject report=new JSONObject();report.put("scope",s.sc.label());report.put("timestamp",System.currentTimeMillis());report.put("cancelled",s.cancelled.get());report.put("testedHosts",s.done.get());report.put("totalHosts",s.total);report.put("tcpAttempts",s.attempts.get());report.put("tcpOpen",s.open.get());report.put("tcpTimeouts",s.timeouts.get());report.put("tcpRefused",s.refused.get());report.put("tcpOther",s.other.get());report.put("devices",records);report.put("notes",new JSONArray(s.notes));lastJson=report.toString(2);
             getPreferences(MODE_PRIVATE).edit().putString("last_scan",lastJson).apply();
         }catch(Exception ignored){}
         Set<String> added=new HashSet<>(now);added.removeAll(previous);boolean hadPrevious=!previous.isEmpty();if(!s.cancelled.get())previous=now;
