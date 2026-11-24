@@ -53,6 +53,11 @@ public final class LiveCameraActivity extends ComponentActivity {
 
     private Button startButton,stopButton,chooseButton;
     private PreviewView previewView;
+    private FaceOverlayView overlayView;
+    private CandidateStore candidateStore;
+    private LinearLayout galleryStrip;
+    private TextView galleryTitle;
+    private final int COLOR_BG=0xFF0C1426, COLOR_PANEL=0xFF18243A, COLOR_TEXT=0xFFF3F7FC, COLOR_MUTED=0xFF94A7BF, COLOR_ACCENT=0xFF22D6AD;
     private TextView status,metrics,matchStatus,refLabel;
     private ProcessCameraProvider cameraProvider;
     private FaceEngine engine;
@@ -62,7 +67,10 @@ public final class LiveCameraActivity extends ComponentActivity {
 
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setTitle("实时摄像头 · Video Face Search");
+        setTitle("Face Search · Live");
+        getWindow().setStatusBarColor(0xFF0C1426);
+        getWindow().setNavigationBarColor(0xFF0C1426);
+        candidateStore=new CandidateStore(this);
         useAccelerator=getIntent().getBooleanExtra("use_accelerator",true);
         String uri=getIntent().getStringExtra("reference_uri");
         if(uri!=null)try{referenceUri=Uri.parse(uri);}catch(Exception ignored){}
@@ -70,23 +78,41 @@ public final class LiveCameraActivity extends ComponentActivity {
         ScrollView scroll=new ScrollView(this);
         LinearLayout root=new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(12),dp(12),dp(12),dp(20));
+        root.setPadding(dp(14),dp(16),dp(14),dp(32));
+        GradientDrawable background=new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+            new int[]{0xFF0C1426,0xFF101B30,0xFF0E172B});
+        root.setBackground(background);scroll.setFillViewport(true);
+        scroll.setBackgroundColor(COLOR_BG);
         scroll.addView(root);
-        root.addView(label("实时摄像头分析",23,true));
-        root.addView(label("仅前台运行 · 本机离线分析 · 仅限经授权的测试素材；候选不代表身份确认",12,false));
+        TextView brand=label("FACE / SEARCH   ·   LIVE",12,true);
+        brand.setTextColor(COLOR_ACCENT);root.addView(brand);
+        root.addView(label("实时智能分析",29,true));
+        TextView subtitle=label("VULKAN GPU  ·  ADAPTIVE SCAN  ·  ON DEVICE",11,false);
+        subtitle.setTextColor(COLOR_MUTED);root.addView(subtitle);
+        root.addView(label("仅限已获授权的测试 · 候选相似度不代表身份确认",11,false));
 
         previewView=new PreviewView(this);
         previewView.setImplementationMode(PreviewView.ImplementationMode.COMPATIBLE);
         previewView.setScaleType(PreviewView.ScaleType.FILL_CENTER);
         FrameLayout cameraFrame=new FrameLayout(this);
-        cameraFrame.addView(previewView,new FrameLayout.LayoutParams(-1,dp(330)));
-        TextView hint=label("摄像头预览 · 默认后置",14,true);
-        hint.setTextColor(Color.WHITE);
-        hint.setBackgroundColor(0x70000000);
+        cameraFrame.addView(previewView,new FrameLayout.LayoutParams(-1,dp(400)));
+        overlayView=new FaceOverlayView(this);
+        cameraFrame.addView(overlayView,new FrameLayout.LayoutParams(-1,dp(400)));
+        GradientDrawable cameraBg=new GradientDrawable();
+        cameraBg.setColor(0xFF152136);cameraBg.setCornerRadius(dp(18));
+        cameraFrame.setBackground(cameraBg);
+        cameraFrame.setClipToOutline(true);
+        TextView hint=label("● LIVE  ·  CAMERA 01",12,true);
+        hint.setTextColor(COLOR_ACCENT);
+        hint.setBackgroundColor(0xB20C1726);
         FrameLayout.LayoutParams hintParams=new FrameLayout.LayoutParams(-1,-2,Gravity.TOP);
         cameraFrame.addView(hint,hintParams);
         root.addView(cameraFrame);
+        TextView legend=label("青色：检测人脸   /   绿色：达到候选阈值",12,false);
+        legend.setTextColor(COLOR_MUTED);root.addView(legend);
 
+        TextView referenceTitle=label("01  /  参考人脸",16,true);
+        root.addView(referenceTitle);
         chooseButton=button("选择参考照片",v->chooseReference());
         root.addView(chooseButton);
         refLabel=label(referenceUri==null?"尚未选择参考照片":"参考照片已选，启动时读取",13,false);
@@ -96,29 +122,99 @@ public final class LiveCameraActivity extends ComponentActivity {
         controls.setOrientation(LinearLayout.HORIZONTAL);
         startButton=button("开始实时分析",v->start());
         stopButton=button("停止",v->stop());
-        controls.addView(startButton,new LinearLayout.LayoutParams(0,dp(52),1f));
-        controls.addView(stopButton,new LinearLayout.LayoutParams(0,dp(52),1f));
+        controls.setPadding(0,dp(8),0,dp(6));
+        LinearLayout.LayoutParams startParams=new LinearLayout.LayoutParams(0,dp(55),1f);
+        startParams.rightMargin=dp(8);
+        controls.addView(startButton,startParams);
+        controls.addView(stopButton,new LinearLayout.LayoutParams(0,dp(55),.65f));
+        styleButton(startButton,COLOR_ACCENT,COLOR_BG);
+        styleButton(stopButton,0xFF29364D,COLOR_TEXT);
         root.addView(controls);
         stopButton.setEnabled(false);
 
-        status=label("准备就绪。启动后默认每5帧分析一次，算力不足时自动加大间隔。",14,true);
-        root.addView(status);
-        metrics=label("分析间隔：5 帧 | 预览帧率：-- | 处理帧率：--",14,false);
-        root.addView(metrics);
-        matchStatus=label("实时候选：尚未开始",16,true);
-        root.addView(matchStatus);
-        root.addView(label("为了保持摄像头实时流畅，分析器不会排队处理旧帧；无法持续跟上时跳过过期画面，后台或离开页面立即停止。",12,false));
+        root.addView(label("02  /  实时分析状态",16,true));
+        status=label("准备就绪。每5帧分析一次，算力不足时智能降低频率。",13,false);
+        metrics=label("PREVIEW -- FPS   ·   SCAN -- FPS   ·   /5 FRAMES",14,true);
+        matchStatus=label("当前状态 · 尚未开始",15,true);
+        LinearLayout dashboard=new LinearLayout(this);
+        dashboard.setOrientation(LinearLayout.VERTICAL);
+        dashboard.setPadding(dp(12),dp(10),dp(12),dp(10));
+        dashboard.setBackground(panelBackground(COLOR_PANEL,14));
+        dashboard.addView(metrics);dashboard.addView(matchStatus);dashboard.addView(status);
+        root.addView(dashboard);
+
+        root.addView(label("03  /  候选人脸截图",16,true));
+        galleryTitle=label("截图仅保存在应用本地，最多40张；每次保留候选脸部裁剪。",12,false);
+        galleryTitle.setTextColor(COLOR_MUTED);root.addView(galleryTitle);
+        HorizontalScrollView screenshots=new HorizontalScrollView(this);
+        screenshots.setHorizontalScrollBarEnabled(false);
+        galleryStrip=new LinearLayout(this);galleryStrip.setOrientation(LinearLayout.HORIZONTAL);
+        screenshots.addView(galleryStrip);root.addView(screenshots);
+        Button clear=button("清空已保存的候选截图",v->new AlertDialog.Builder(this)
+            .setTitle("清空候选截图？")
+            .setMessage("仅删除本应用私有目录里的候选人脸截图，不影响原视频和模型。")
+            .setNegativeButton("取消",null)
+            .setPositiveButton("删除",(dialog,which)->{
+                candidateStore.clearAll();renderGallery();
+            }).show());
+        styleButton(clear,0xFF263348,COLOR_MUTED);
+        root.addView(clear);
+        renderGallery();
+        TextView footer=label("仅前台使用 · 不上传人脸 · 不记录连续视频 · 停止即关闭摄像头",11,false);
+        footer.setTextColor(COLOR_MUTED);root.addView(footer);
         setContentView(scroll);
     }
     private int dp(int n){return Math.round(n*getResources().getDisplayMetrics().density);}
     private TextView label(String text,int size,boolean bold) {
         TextView t=new TextView(this);t.setText(text);t.setTextSize(size);
-        t.setTextColor(Color.rgb(30,34,42));t.setPadding(dp(5),dp(5),dp(5),dp(5));
+        t.setTextColor(COLOR_TEXT);t.setPadding(dp(5),dp(8),dp(5),dp(8));
         if(bold)t.setTypeface(null,android.graphics.Typeface.BOLD);
         return t;
     }
     private Button button(String name,View.OnClickListener onClick){
-        Button b=new Button(this);b.setText(name);b.setAllCaps(false);b.setOnClickListener(onClick);return b;
+        Button b=new Button(this);b.setText(name);b.setAllCaps(false);
+        b.setTextSize(14);b.setOnClickListener(onClick);
+        styleButton(b,0xFF24344B,COLOR_TEXT);return b;
+    }
+    private GradientDrawable panelBackground(int color,int radius){
+        GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));return d;
+    }
+    private void styleButton(Button b,int color,int text){
+        b.setTextColor(text);b.setBackground(panelBackground(color,12));
+        b.setMinHeight(dp(48));
+    }
+    private void renderGallery(){
+        if(galleryStrip==null)return;
+        galleryStrip.removeAllViews();
+        List<File> images=candidateStore.list();
+        galleryTitle.setText("已保存 "+images.size()+" 张候选人脸 · 私有存储 · 长按前请人工核验");
+        if(images.isEmpty()){
+            TextView empty=label("暂无候选截图   ·   找到候选后自动出现在这里",13,false);
+            empty.setTextColor(COLOR_MUTED);galleryStrip.addView(empty);return;
+        }
+        for(File file:images){
+            LinearLayout item=new LinearLayout(this);item.setOrientation(LinearLayout.VERTICAL);
+            item.setPadding(dp(6),dp(6),dp(6),dp(6));item.setBackground(panelBackground(COLOR_PANEL,12));
+            LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(dp(114),dp(148));lp.rightMargin=dp(8);
+            BitmapFactory.Options opt=new BitmapFactory.Options();opt.inSampleSize=2;
+            Bitmap thumb=BitmapFactory.decodeFile(file.getAbsolutePath(),opt);
+            ImageView iv=new ImageView(this);iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            if(thumb!=null)iv.setImageBitmap(thumb);
+            item.addView(iv,new LinearLayout.LayoutParams(-1,dp(104)));
+            TextView caption=label(String.format(Locale.US,"相似度 %.3f",CandidateStore.scoreFromName(file)/1000f),12,true);
+            caption.setTextColor(COLOR_ACCENT);
+            item.addView(caption);galleryStrip.addView(item,lp);
+            item.setOnClickListener(v->{
+                ImageView zoom=new ImageView(this);zoom.setPadding(dp(8),dp(8),dp(8),dp(8));
+                zoom.setAdjustViewBounds(true);
+                Bitmap full=BitmapFactory.decodeFile(file.getAbsolutePath());
+                if(full!=null)zoom.setImageBitmap(full);
+                new AlertDialog.Builder(this).setTitle(file.getName())
+                   .setView(zoom)
+                   .setPositiveButton("关闭",(d,w)->{if(full!=null)full.recycle();})
+                   .show();
+            });
+        }
     }
     private void update(String s){runOnUiThread(()->status.setText(s));}
     private void chooseReference(){
@@ -172,6 +268,8 @@ public final class LiveCameraActivity extends ComponentActivity {
             try{
                 ModelStore models=new ModelStore(this);
                 models.ensure(this::update);
+                try{models.ensureNcnnCached(this::update);}
+                catch(Exception copyError){update("Vulkan 模型持久化失败，将尝试兼容模式："+copyError.getMessage());}
                 created=new FaceEngine(models.detector(),models.recognizer(),
                         useAccelerator,getCacheDir(),getAssets());
                 Bitmap picture=readReference();
@@ -299,6 +397,11 @@ public final class LiveCameraActivity extends ComponentActivity {
             final String info=String.format(Locale.US,
                 "预览: %.1f FPS · 分析: %.2f FPS · 间隔: 每%d帧\\n单帧推理: %d ms · 已分析: %d · 忙时跳过: %d",
                 cameraFps,analyzedFps,stride,elapsedMs,processed.get(),droppedBusy.get());
+            File saved=null;
+            try{if(candidates>0)saved=candidateStore.capture(frame,faces,referenceEmbedding,THRESHOLD);}
+            catch(IOException err){update("保存候选截图失败："+err.getMessage());}
+            final boolean newScreenshot=saved!=null;
+            final int imageW=frame.getWidth(),imageH=frame.getHeight();
             final String match=best<0?"当前采样帧未检测到人脸":
                 String.format(Locale.US,"当前采样帧 %d 张脸；最高相似度 %.3f；%s",
                     visible,best,n>0?n+" 个待人工核验候选":"无超过阈值的候选");
@@ -306,6 +409,8 @@ public final class LiveCameraActivity extends ComponentActivity {
                 if(run==generation.get()&&started){
                     metrics.setText(info);
                     matchStatus.setText(match);
+                    overlayView.show(faces,referenceEmbedding,imageW,imageH,THRESHOLD);
+                    if(newScreenshot)renderGallery();
                 }
             });
         }catch(Throwable e){
@@ -336,6 +441,7 @@ public final class LiveCameraActivity extends ComponentActivity {
         stopButton.setEnabled(false);
         startButton.setEnabled(true);
         chooseButton.setEnabled(true);
+        overlayView.clear();
         update("已停止实时分析，摄像头已关闭。");
         inferenceExecutor.execute(()->{
             FaceEngine loaded=engine;
