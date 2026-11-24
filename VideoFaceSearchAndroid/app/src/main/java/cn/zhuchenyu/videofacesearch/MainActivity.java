@@ -138,21 +138,29 @@ public final class MainActivity extends Activity {
                 update("加载 InsightFace 检测和识别模型...");
                 long jobStart = android.os.SystemClock.elapsedRealtime();
                 try(FaceEngine engine=new FaceEngine(store.detector(),store.recognizer(),preferAccelerator,getCacheDir(),getAssets())){
+                    long initializationMs=android.os.SystemClock.elapsedRealtime()-jobStart;
+                    long referenceStart=android.os.SystemClock.elapsedRealtime();
                     Bitmap reference=readPhoto(photo);
                     List<FaceEngine.Face> q;
                     try { q=engine.analyze(reference); }finally{reference.recycle();}
                     if(q.isEmpty())throw new IllegalArgumentException("参考照片没有检测到可用人脸");
                     q.sort((a,b)->Float.compare(b.confidence,a.confidence));
                     update("参考人脸已提取，开始视频分析...\n"+engine.providerStatus());
+                    long referenceMs=android.os.SystemClock.elapsedRealtime()-referenceStart;
+                    engine.resetStageTiming();
                     VideoAnalyzer.Report report=new VideoAnalyzer(this).search(engine,video,q.get(0).embedding,
                             frameInterval,0.48f,preferSequentialDecoder,this::update);
                     lastSegments=report.segments;
+                    long profileStart=android.os.SystemClock.elapsedRealtime();
                     String profile=engine.finishProfiling();
+                    long profileMs=android.os.SystemClock.elapsedRealtime()-profileStart;
                     long elapsed=android.os.SystemClock.elapsedRealtime()-jobStart;
                     StringBuilder out=new StringBuilder();
                     out.append("总耗时 ").append(elapsed).append(" ms · 视频解码 ")
                        .append(report.decodeMs).append(" ms · 模型推理 ")
                        .append(report.inferenceMs).append(" ms。\n");
+                    out.append(String.format(Locale.US,"初始化 %.3f 秒 · 参考图 %.3f 秒 · 性能日志整理 %.3f 秒\n",initializationMs/1000d,referenceMs/1000d,profileMs/1000d));
+                    out.append(engine.stageTiming()).append("\n\n");
                     out.append("解码后端：").append(report.decoder).append("\n");
                     if(report.decodedFrames>=0)out.append("顺序解码输出 ").append(report.decodedFrames).append(" 帧（仅采样帧送入模型）。\n");
                     out.append(engine.providerStatus()).append("\n").append(profile).append("\n\n");

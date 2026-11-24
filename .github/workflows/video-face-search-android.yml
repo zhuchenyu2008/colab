@@ -48,15 +48,59 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
-      - name: Build signed debug APK
-        run: gradle -p VideoFaceSearchAndroid :app:assembleDebug --stacktrace
-      - name: Package APK
+      - name: Build unsigned release APK
+        run: gradle -p VideoFaceSearchAndroid :app:assembleRelease --stacktrace
+      - name: Sign with pinned long-term key if configured
+        id: signing
+        env:
+          VFS_SIGNING_KEYSTORE_B64: ${{ secrets.VFS_SIGNING_KEYSTORE_B64 }}
+          VFS_SIGNING_PASSWORD: ${{ secrets.VFS_SIGNING_PASSWORD }}
+          EXPECTED_CERT: ec20e4038b5fa1ed6c2a4b13452d4d70ad11aaae6599a8b569e49cb00a260a45
         run: |
-          cp VideoFaceSearchAndroid/app/build/outputs/apk/debug/app-debug.apk VideoFaceSearch-Android-v0.4.0.apk
-          ls -lh VideoFaceSearch-Android-v0.4.0.apk
+          set -euo pipefail
+          UNSIGNED="VideoFaceSearchAndroid/app/build/outputs/apk/release/app-release-unsigned.apk"
+          SIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          VERSION=$(sed -n 's/.*versionName = "\(.*\)"/\1/p' VideoFaceSearchAndroid/app/build.gradle.kts)
+          test -n "$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [[ -z "$VFS_SIGNING_KEYSTORE_B64" && -z "$VFS_SIGNING_PASSWORD" ]]; then
+            echo "::notice::Permanent signing secrets not configured. Producing unsigned APK for local signing only."
+            mkdir -p unsigned
+            cp "$UNSIGNED" "unsigned/VideoFaceSearch-Android-v$VERSION-unsigned.apk"
+            cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" unsigned/apksigner.jar
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ -z "$VFS_SIGNING_KEYSTORE_B64" || -z "$VFS_SIGNING_PASSWORD" ]]; then
+            echo "::error::Both permanent signing secrets must be configured."
+            exit 1
+          fi
+          umask 077
+          KEYSTORE="$RUNNER_TEMP/vfs-release.p12"
+          trap 'rm -f "$KEYSTORE"' EXIT
+          printf '%s' "$VFS_SIGNING_KEYSTORE_B64" | base64 -d > "$KEYSTORE"
+          mkdir -p signed
+          APK="signed/VideoFaceSearch-Android-v$VERSION.apk"
+          "$SIGNER" sign --ks "$KEYSTORE" --ks-type PKCS12 --ks-key-alias vfs-release --ks-pass env:VFS_SIGNING_PASSWORD --key-pass env:VFS_SIGNING_PASSWORD --out "$APK" "$UNSIGNED"
+          "$SIGNER" verify --verbose --print-certs "$APK" > "$RUNNER_TEMP/vfs-cert.txt"
+          cat "$RUNNER_TEMP/vfs-cert.txt"
+          ACTUAL=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/vfs-cert.txt")
+          if [[ "$ACTUAL" != "$EXPECTED_CERT" ]]; then
+            echo "::error::Unexpected signing certificate. Refusing to publish APK."
+            exit 1
+          fi
+          echo "signed=true" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
+        if: steps.signing.outputs.signed == 'true'
         with:
-          name: VideoFaceSearch-Android-v0.4.0
-          path: VideoFaceSearch-Android-v0.4.0.apk
+          name: VideoFaceSearch-Android-v${{ steps.signing.outputs.version }}
+          path: signed/*.apk
           if-no-files-found: error
           retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: steps.signing.outputs.signed == 'false'
+        with:
+          name: VideoFaceSearch-Android-v${{ steps.signing.outputs.version }}-unsigned
+          path: unsigned/
+          if-no-files-found: error
+          retention-days: 7

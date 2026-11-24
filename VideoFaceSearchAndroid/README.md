@@ -62,3 +62,10 @@ Source algorithm inspiration: InsightFace SCRFD and ArcFace inference, original 
 - The existing Vulkan SCRFD, CPU ArcFace, similarity threshold, and sampling interval settings are unchanged. Sequential sampling uses actual decoded presentation timestamps, so selected frames/timestamps and numeric scores may differ slightly from the legacy nearest-timestamp path.
 - A UI checkbox retains MediaMetadataRetriever for A/B comparisons. Unsupported formats, HDR, timeout, or decoder output failure trigger a clean restart in legacy mode. Inference errors do not cause a decode restart.
 - Results identify the selected decoder (including the Android hardware-acceleration flag where available), decoded frame count, sampled frame count, and timing. No phone-specific speed claim until measured. Debug signing may require uninstalling the old APK.
+
+## v0.5.0: performance diagnostics and permanent signing
+
+- Reports video-stage detection end-to-end, recognition input preparation/alignment, ArcFace inference, and embedding output/normalization separately; also reports initialization, reference-image processing, and profiling export time. Models, sample cadence and thresholds are unchanged. Stage timings are wall-clock timings (including native transfers/overheads), not GPU kernel time.
+- APKs use a permanent release signing key instead of ephemeral debug signing. Package ID remains unchanged. Upgrading from the older debug-signed APK may require one last uninstall. Later releases using the same key and increasing versionCode can be installed over the previous release.
+- Configure repository Actions secrets `VFS_SIGNING_KEYSTORE_B64` (base64 PKCS12 file) and `VFS_SIGNING_PASSWORD`. Alias: `vfs-release`. Keep the keystore and password in a private backup; never commit either to git. The CI verifies the expected certificate SHA-256 before publishing signed APKs. If both secrets are absent, CI produces only an explicitly unsigned local-signing artifact, not a randomly signed installable APK.
+- Pinned release certificate SHA-256: `ec20e4038b5fa1ed6c2a4b13452d4d70ad11aaae6599a8b569e49cb00a260a45`.

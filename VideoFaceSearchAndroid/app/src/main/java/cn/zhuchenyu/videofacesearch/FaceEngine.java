@@ -3,6 +3,7 @@ package cn.zhuchenyu.videofacesearch;
 
 import android.graphics.*;
 import android.os.Build;
+import android.os.SystemClock;
 import ai.onnxruntime.providers.NNAPIFlags;
 import java.io.*;
 import java.io.File;
@@ -33,6 +34,19 @@ public final class FaceEngine implements AutoCloseable {
     private boolean profileFinished = false;
     private String profileStatus = "未读取推理性能记录";
     private final File profileDir;
+    private long detectionNs, preparationNs, recognitionNs, postNs;
+    private int analyzedFrames, recognitionCalls;
+
+    public void resetStageTiming() {
+        detectionNs=0;preparationNs=0;recognitionNs=0;postNs=0;
+        analyzedFrames=0;recognitionCalls=0;
+    }
+    private static long tick(){return SystemClock.elapsedRealtimeNanos();}
+    public String stageTiming() {
+        return String.format(Locale.US,
+            "模型阶段耗时（仅视频阶段）\n检测端到端 %.3f 秒（含检测预处理和后处理）\n人脸对齐及识别输入准备 %.3f 秒\nArcFace 推理 %.3f 秒（%d 次）\n特征输出及归一化 %.3f 秒\n计时覆盖 %d 帧",
+            detectionNs/1e9, preparationNs/1e9, recognitionNs/1e9, recognitionCalls, postNs/1e9, analyzedFrames);
+    }
 
     private static final class Prepared {
         final OrtSession session; final boolean nnapi;
@@ -166,6 +180,8 @@ public final class FaceEngine implements AutoCloseable {
         if (original == null) return Collections.emptyList();
         final int ow = original.getWidth(), oh = original.getHeight();
         if (ow <= 0 || oh <= 0) return Collections.emptyList();
+        analyzedFrames++;
+        long detectionStart=tick();
         float scale = Math.min((float)DET / ow, (float)DET / oh);
         int sw = Math.max(1, Math.round(ow * scale)), sh = Math.max(1, Math.round(oh * scale));
         Bitmap input = Bitmap.createBitmap(DET, DET, Bitmap.Config.ARGB_8888);
@@ -183,20 +199,30 @@ public final class FaceEngine implements AutoCloseable {
                 candidates = decode(output, scale, ow, oh);
             } finally { input.recycle(); }
         }
+        detectionNs+=tick()-detectionStart;
         ArrayList<Face> faces = new ArrayList<>();
         for (Candidate c : candidates) {
+            long prepareStart=tick();
             Bitmap crop = align(original, c.landmarks);
-            try (OnnxTensor tensor = imageTensor(crop, REC, 127.5f);
-                 OrtSession.Result result = rec.run(Collections.singletonMap(recInput, tensor))) {
-                FloatBuffer buffer = ((OnnxTensor)result.get(0)).getFloatBuffer();
-                float[] vec = new float[buffer.remaining()];
-                buffer.get(vec);
-                double mag = 0;
-                for (float v: vec) mag += v * v;
-                mag = Math.sqrt(mag);
-                if (mag < 1e-7) continue;
-                for (int j=0; j<vec.length; j++) vec[j] /= (float)mag;
-                faces.add(new Face(c.bbox, vec, c.score));
+            try (OnnxTensor tensor = imageTensor(crop, REC, 127.5f)) {
+                preparationNs+=tick()-prepareStart;
+                long recognitionStart=tick();
+                try (OrtSession.Result result = rec.run(Collections.singletonMap(recInput, tensor))) {
+                    recognitionNs+=tick()-recognitionStart;
+                    recognitionCalls++;
+                    long postStart=tick();
+                    try {
+                        FloatBuffer buffer = ((OnnxTensor)result.get(0)).getFloatBuffer();
+                        float[] vec = new float[buffer.remaining()];
+                        buffer.get(vec);
+                        double mag = 0;
+                        for (float v: vec) mag += v * v;
+                        mag = Math.sqrt(mag);
+                        if (mag < 1e-7) continue;
+                        for (int j=0; j<vec.length; j++) vec[j] /= (float)mag;
+                        faces.add(new Face(c.bbox, vec, c.score));
+                    } finally {postNs+=tick()-postStart;}
+                }
             } finally { crop.recycle(); }
         }
         return faces;
