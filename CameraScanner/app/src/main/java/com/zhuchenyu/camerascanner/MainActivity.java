@@ -177,7 +177,7 @@ public class MainActivity extends Activity {
             Future<?> ssdp=s.pool.submit(()->udpDiscovery(s,false));
             Future<?> mdns=s.pool.submit(()->mdnsDiscovery(s));
             ArrayList<Future<?>> jobs=new ArrayList<>();
-            s.total=(int)(s.sc.high-s.sc.low-1);
+            s.total=(int)(s.sc.high-s.sc.low-2);
             for(long ip=s.sc.low+1;ip<s.sc.high&&!s.cancelled.get();ip++){
                 if(ip==s.sc.ip)continue;String addr=address(ip);
                 jobs.add(s.pool.submit(()->{try{probe(s,addr);}finally{int x=s.done.incrementAndGet();if(x%12==0||x==s.total)ui.post(()->render(s,false));}}));
