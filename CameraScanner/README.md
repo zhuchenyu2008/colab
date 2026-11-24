@@ -9,3 +9,6 @@ RTSP TCP-open evidence now remains visible independently of protocol handshake; 
 
 ## v1.0.2
 Improved Wi-Fi route selection and VPN-aware network binding; faster and deeper scan have explicit ranges; additional potential RTSP ports; visible IP, gateway, port list, TCP attempts and outcomes in the app; avoids cancelling active scans when the activity temporarily moves off screen. On current firmware local network access may be filtered; report will explain zero-response scans. No credentials, no cloud.
+
+## v1.0.3
+Addresses universal socket failures: records actual exception type/message and transport stage, tries a regular network route when Wi-Fi-bound sockets cannot connect, exposes VPN routing and exception diagnostics in-app and JSON exports. Still needs real device verification.
