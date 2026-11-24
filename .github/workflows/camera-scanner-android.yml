@@ -1,0 +1,62 @@
+name: Build Camera Scanner APK
+on:
+  push:
+    branches: [camera-scanner-android]
+    paths:
+      - 'CameraScanner/**'
+      - '.github/workflows/camera-scanner-android.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Install SDK
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Build release
+        run: gradle -p CameraScanner :app:assembleRelease --stacktrace
+      - name: Sign and verify or prepare offline signing
+        id: signing
+        env:
+          KEY_B64: ${{ secrets.CAMERA_SIGNING_KEYSTORE_B64 }}
+          KEY_PASSWORD: ${{ secrets.CAMERA_SIGNING_PASSWORD }}
+          EXPECTED_CERT: 42fc18e6d0100770104913383479f01623a16c8c5dcbcdc2f3415a27cac9e173
+        run: |
+          set -euo pipefail
+          APK=CameraScanner/app/build/outputs/apk/release/app-release-unsigned.apk
+          SIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          mkdir -p deliver
+          if [[ -z "$KEY_B64" && -z "$KEY_PASSWORD" ]]; then
+            cp "$APK" deliver/CameraScanner-v1.0.0-unsigned.apk
+            cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" deliver/apksigner.jar
+            echo "name=CameraScanner-v1.0.0-offline-signing" >> "$GITHUB_OUTPUT"
+          else
+            test -n "$KEY_B64" && test -n "$KEY_PASSWORD"
+            umask 077
+            KEY="$RUNNER_TEMP/camera-release.p12"
+            trap 'rm -f "$KEY"' EXIT
+            printf '%s' "$KEY_B64" | base64 -d > "$KEY"
+            "$SIGNER" sign --ks "$KEY" --ks-type PKCS12 --ks-key-alias camera-release --ks-pass env:KEY_PASSWORD --key-pass env:KEY_PASSWORD --out deliver/CameraScanner-v1.0.0.apk "$APK"
+            "$SIGNER" verify --verbose --print-certs deliver/CameraScanner-v1.0.0.apk | tee cert.txt
+            ACTUAL=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' cert.txt)
+            test "$ACTUAL" = "$EXPECTED_CERT"
+            echo "name=CameraScanner-v1.0.0" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.signing.outputs.name }}
+          path: deliver/
+          if-no-files-found: error
+          retention-days: 30
