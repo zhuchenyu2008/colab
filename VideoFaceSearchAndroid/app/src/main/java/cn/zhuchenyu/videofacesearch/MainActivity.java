@@ -26,19 +26,28 @@ public final class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle state){
         super.onCreate(state);
-        setTitle("Video Face Search");
+        setTitle("Face Search");
+        getWindow().setStatusBarColor(0xFF0C1426);
+        getWindow().setNavigationBarColor(0xFF0C1426);
         ScrollView scroll=new ScrollView(this);
         LinearLayout root=new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(20),dp(24),dp(20),dp(30));
+        root.setPadding(dp(18),dp(24),dp(18),dp(30));
+        root.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+            new int[]{0xFF0C1426,0xFF13223C,0xFF0D172A}));
+        scroll.setFillViewport(true);
+        scroll.setBackgroundColor(0xFF0C1426);
         scroll.addView(root);
-        TextView title=label("Video Face Search",26,true); root.addView(title);
-        root.addView(label("DolphinBit/video-face-search 的 Android 原生移植 · 本机离线推理",13,false));
-        root.addView(label("用于获得授权的视频素材。匹配属于候选提示，不构成身份确认。",13,false));
-        root.addView(label("① 选择参考人脸",18,true));
+        TextView tag=label("FACE / SEARCH",12,true);
+        tag.setTextColor(0xFF22D6AD);root.addView(tag);
+        TextView title=label("视觉检索工作台",28,true);root.addView(title);
+        TextView subtitle=label("ANDROID · VULKAN GPU · LOCAL AI",12,false);
+        subtitle.setTextColor(0xFF9EB1C7);root.addView(subtitle);
+        root.addView(label("授权测试用途 · 所有分析均在本机完成 · 相似度不等于身份确认",11,false));
+        root.addView(section("01   选择参考照片"));
         root.addView(button("选择参考照片",v->pick("image/*",101)));
         photoLabel=label("尚未选择",14,false);root.addView(photoLabel);
-        root.addView(label("② 实时摄像头（新增）",18,true));
+        root.addView(section("02   实时摄像头"));
         root.addView(button("打开实时监测 · 自动调节分析频率",v->{
             Intent intent=new Intent(this, LiveCameraActivity.class);
             if(photo!=null)intent.putExtra("reference_uri",photo.toString());
@@ -46,10 +55,10 @@ public final class MainActivity extends Activity {
             startActivity(intent);
         }));
         root.addView(label("默认每5个摄像头帧分析一次，手机忙时自动增加间隔；只在前台运行，画面不录制或上传。",12,false));
-        root.addView(label("③ 选择 10–30 秒视频",18,true));
+        root.addView(section("03   本地视频检索"));
         root.addView(button("选择本地视频",v->pick("video/*",102)));
         videoLabel=label("尚未选择",14,false);root.addView(videoLabel);
-        root.addView(label("④ 扫描参数",18,true));
+        root.addView(section("04   推理设置"));
         nnapiToggle = new CheckBox(this);
         nnapiToggle.setText("Vulkan GPU 人脸检测与 ArcFace 优先（不可用时回退 CPU）");
         nnapiToggle.setChecked(true);
@@ -69,23 +78,43 @@ public final class MainActivity extends Activity {
             public void onProgressChanged(SeekBar b,int p,boolean user){frameInterval=p+1;intervalText.setText("每 "+frameInterval+" 帧分析一次（越小越慢、漏检机会越少）");}
             public void onStartTrackingTouch(SeekBar b){} public void onStopTrackingTouch(SeekBar b){}
         });root.addView(frameIntervalBar);
-        modelButton=button("首次下载模型 / 检查模型",v->prepareModel());root.addView(modelButton);
+        modelButton=button("模型就绪检查 / 迁移到持久存储",v->prepareModel());root.addView(modelButton);
         analyzeButton=button("开始搜索视频",v->startSearch());root.addView(analyzeButton);
         exportButton=button("导出候选视频片段",v->exportClips());exportButton.setEnabled(false);root.addView(exportButton);
-        status=label("就绪。首次使用需下载约 200MB 的 buffalo_l 模型，之后可离线运行。",14,false);
-        root.addView(status);
-        results=label("分析结果将在此显示。",15,false);root.addView(results);
+        status=label("就绪 · 首次启动将把已有 Vulkan 权重复制到持久目录，之后可安装小体积更新。",13,false);
+        status.setBackground(panel(0xFF182841));root.addView(status);
+        results=label("分析结果将在此显示。",15,false);
+        results.setBackground(panel(0xFF182841));root.addView(results);
         setContentView(scroll);
+        // One-time transition of the *already installed* large GPU model into app-private files.
+        if(!new ModelStore(this).ncnnReady()){
+            setBusy(true);
+            executor.execute(()->{
+                try{new ModelStore(this).ensureNcnnCached(this::update);}
+                catch(Exception e){update("GPU 模型缓存尚未完成："+e.getMessage());}
+                finally{setBusy(false);}
+            });
+        }else update("GPU 权重已持久保存；升级精简 APK 不会重新下载模型。");
     }
     private TextView label(String text,int size,boolean bold) {
         TextView view=new TextView(this);view.setText(text);view.setTextSize(size);
-        view.setTextColor(Color.rgb(29,35,43));
+        view.setTextColor(0xFFEFF6FF);
         view.setPadding(0,dp(7),0,dp(7));
         if(bold)view.setTypeface(null,Typeface.BOLD);
         return view;
     }
     private Button button(String text,View.OnClickListener l) {
-        Button b=new Button(this);b.setText(text);b.setAllCaps(false);b.setOnClickListener(l);return b;
+        Button b=new Button(this);b.setText(text);b.setAllCaps(false);b.setOnClickListener(l);
+        b.setTextColor(0xFFEFF6FF);b.setTextSize(14);
+        b.setBackground(panel(0xFF24435A));b.setMinHeight(dp(50));return b;
+    }
+    private GradientDrawable panel(int color){
+        GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(12));return d;
+    }
+    private TextView section(String s){
+        TextView view=label(s,17,true);
+        view.setPadding(0,dp(17),0,dp(9));
+        return view;
     }
     private int dp(int x){return Math.round(x*getResources().getDisplayMetrics().density);}
     private void pick(String mime,int requestCode) {
@@ -116,8 +145,10 @@ public final class MainActivity extends Activity {
         setBusy(true);
         executor.execute(()->{
             try{
-                new ModelStore(this).ensure(this::update);
-                update("模型已就绪，之后可离线识别。");
+                ModelStore store=new ModelStore(this);
+                store.ensure(this::update);
+                store.ensureNcnnCached(this::update);
+                update("模型已就绪且 GPU 权重已持久保存；今后可以安装轻量更新。");
             }catch(Exception e){update("模型准备失败：" + e.getMessage());}
             finally{setBusy(false);}
         });
@@ -143,6 +174,8 @@ public final class MainActivity extends Activity {
         executor.execute(()->{
             try {
                 ModelStore store=new ModelStore(this);store.ensure(this::update);
+                try{store.ensureNcnnCached(this::update);}
+                catch(Exception e){update("Vulkan 权重缓存失败，将使用兼容模式："+e.getMessage());}
                 update("加载 InsightFace 检测和识别模型...");
                 long jobStart = android.os.SystemClock.elapsedRealtime();
                 try(FaceEngine engine=new FaceEngine(store.detector(),store.recognizer(),preferAccelerator,getCacheDir(),getAssets())){
