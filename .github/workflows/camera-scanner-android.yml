@@ -43,20 +43,20 @@ jobs:
           SIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
           mkdir -p deliver
           if [[ -z "$KEY_B64" && -z "$KEY_PASSWORD" ]]; then
-            cp "$APK" deliver/CameraScanner-v1.0.1-unsigned.apk
+            cp "$APK" deliver/CameraScanner-v1.0.2-unsigned.apk
             cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" deliver/apksigner.jar
-            echo "name=CameraScanner-v1.0.1-offline-signing" >> "$GITHUB_OUTPUT"
+            echo "name=CameraScanner-v1.0.2-offline-signing" >> "$GITHUB_OUTPUT"
           else
             test -n "$KEY_B64" && test -n "$KEY_PASSWORD"
             umask 077
             KEY="$RUNNER_TEMP/camera-release.p12"
             trap 'rm -f "$KEY"' EXIT
             printf '%s' "$KEY_B64" | base64 -d > "$KEY"
-            "$SIGNER" sign --ks "$KEY" --ks-type PKCS12 --ks-key-alias camera-release --ks-pass env:KEY_PASSWORD --key-pass env:KEY_PASSWORD --out deliver/CameraScanner-v1.0.1.apk "$APK"
-            "$SIGNER" verify --verbose --print-certs deliver/CameraScanner-v1.0.1.apk | tee cert.txt
+            "$SIGNER" sign --ks "$KEY" --ks-type PKCS12 --ks-key-alias camera-release --ks-pass env:KEY_PASSWORD --key-pass env:KEY_PASSWORD --out deliver/CameraScanner-v1.0.2.apk "$APK"
+            "$SIGNER" verify --verbose --print-certs deliver/CameraScanner-v1.0.2.apk | tee cert.txt
             ACTUAL=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' cert.txt)
             test "$ACTUAL" = "$EXPECTED_CERT"
-            echo "name=CameraScanner-v1.0.1" >> "$GITHUB_OUTPUT"
+            echo "name=CameraScanner-v1.0.2" >> "$GITHUB_OUTPUT"
           fi
       - uses: actions/upload-artifact@v4
         with:
