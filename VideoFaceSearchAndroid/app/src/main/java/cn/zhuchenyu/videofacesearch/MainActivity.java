@@ -5,6 +5,7 @@ import android.app.*;
 import android.os.*;
 import android.content.*;
 import android.graphics.*;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.view.*;
 import android.widget.*;

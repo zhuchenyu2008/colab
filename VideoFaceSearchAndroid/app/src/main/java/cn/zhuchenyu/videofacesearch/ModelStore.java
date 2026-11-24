@@ -24,7 +24,7 @@ public final class ModelStore {
     public File ncnnParam(){return new File(ncnnDir(),"w600k_r50.ncnn.param");}
     public File ncnnBin(){return new File(ncnnDir(),"w600k_r50.ncnn.bin");}
     public boolean ncnnReady(){return ncnnParam().length()>1000 && ncnnBin().length()>100_000_000L;}
-    public void ensureNcnnCached(Progress progress)throws Exception {
+    public void ensureNcnnCached(Progress progress)throws Exception { synchronized(ModelStore.class){
         if(ncnnReady())return;
         File folder=ncnnDir();
         if(!folder.exists()&&!folder.mkdirs())throw new IOException("无法建立模型缓存目录");
@@ -38,6 +38,7 @@ public final class ModelStore {
         copyAsset("w600k_r50.ncnn.bin",ncnnBin());
         if(!ncnnReady())throw new IOException("Vulkan 模型缓存不完整");
         progress.update("Vulkan 模型迁移成功。后续安装轻量版可直接复用。");
+    }
     }
     private void copyAsset(String name,File target)throws Exception{
         if(target.length()>(name.endsWith(".bin")?100_000_000L:1000L))return;
