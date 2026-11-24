@@ -210,6 +210,7 @@ public class MainActivity extends Activity {
     private void runScan(Session s){
         WifiManager.MulticastLock lock=null;
         try{
+            s.total=(int)(s.sc.high-s.sc.low-2);
             if(!preflightPhysicalWifi(s))return;
             WifiManager wm=(WifiManager)getApplicationContext().getSystemService(WIFI_SERVICE);
             if(wm!=null){lock=wm.createMulticastLock("camera-discovery");lock.setReferenceCounted(false);lock.acquire();}
@@ -217,7 +218,6 @@ public class MainActivity extends Activity {
             Future<?> ssdp=s.pool.submit(()->udpDiscovery(s,false));
             Future<?> mdns=s.pool.submit(()->mdnsDiscovery(s));
             ArrayList<Future<?>> jobs=new ArrayList<>();
-            s.total=(int)(s.sc.high-s.sc.low-2);
             for(long ip=s.sc.low+1;ip<s.sc.high&&!s.cancelled.get();ip++){
                 if(ip==s.sc.ip)continue;String addr=address(ip);
                 jobs.add(s.pool.submit(()->{try{probe(s,addr);}finally{int x=s.done.incrementAndGet();if(x%12==0||x==s.total)ui.post(()->render(s,false));}}));
@@ -377,7 +377,7 @@ public class MainActivity extends Activity {
         if(current!=s)return;
         List<Device> list=sorted(s);long confirmed=list.stream().filter(d->d.onvif||d.rtsp||d.mdns).count();
         counts.setText(confirmed+" 个协议确认 · "+list.size()+" 个有响应 IP");
-        progress.setProgress(complete&&!s.cancelled.get()?100:Math.min(99,100*s.done.get()/Math.max(1,s.total)));
+        progress.setProgress(s.networkBlocked.get()?0:(complete&&!s.cancelled.get()?100:Math.min(99,100*s.done.get()/Math.max(1,s.total))));
         if(!complete)status.setText("扫描 "+s.done.get()+" / "+s.total+" 个 IP · TCP已连接 "+s.open.get()+" 次");
         if(complete)status.setText(s.networkBlocked.get()?"检测中止：系统禁止绑定实际 Wi-Fi，未生成设备结论":"扫描结束 · 实际 Wi-Fi TCP 连接 "+s.open.get()+" 次");
         results.removeAllViews();
