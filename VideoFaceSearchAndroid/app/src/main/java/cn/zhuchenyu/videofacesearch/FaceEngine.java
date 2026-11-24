@@ -26,8 +26,13 @@ public final class FaceEngine implements AutoCloseable {
         {41.5493f,92.3655f},{70.7299f,92.2041f}
     };
     private final OrtEnvironment env;
-    private final OrtSession det, rec;
-    private final String detInput, recInput;
+    private final OrtSession det;
+    private OrtSession rec;
+    private final String detInput;
+    private String recInput;
+    private final File fallbackRecognizerModel;
+    private boolean vulkanRecognitionActive;
+    private int vulkanRecognitionCalls;
     private final GpuFaceDetector vulkan;
     private final boolean detNnapi, recNnapi;
     private final String[] providerNotes = new String[2];
@@ -39,13 +44,13 @@ public final class FaceEngine implements AutoCloseable {
 
     public void resetStageTiming() {
         detectionNs=0;preparationNs=0;recognitionNs=0;postNs=0;
-        analyzedFrames=0;recognitionCalls=0;
+        analyzedFrames=0;recognitionCalls=0;vulkanRecognitionCalls=0;
     }
     private static long tick(){return SystemClock.elapsedRealtimeNanos();}
     public String stageTiming() {
         return String.format(Locale.US,
-            "模型阶段耗时（仅视频阶段）\n检测端到端 %.3f 秒（含检测预处理和后处理）\n人脸对齐及识别输入准备 %.3f 秒\nArcFace 推理 %.3f 秒（%d 次）\n特征输出及归一化 %.3f 秒\n计时覆盖 %d 帧",
-            detectionNs/1e9, preparationNs/1e9, recognitionNs/1e9, recognitionCalls, postNs/1e9, analyzedFrames);
+            "模型阶段耗时（仅视频阶段）\n检测端到端 %.3f 秒（含检测预处理和后处理）\n人脸对齐及识别输入准备 %.3f 秒\nArcFace 推理 %.3f 秒（%d 次；Vulkan 完成 %d 次）\n特征输出及归一化 %.3f 秒\n计时覆盖 %d 帧",
+            detectionNs/1e9, preparationNs/1e9, recognitionNs/1e9, recognitionCalls, vulkanRecognitionCalls, postNs/1e9, analyzedFrames);
     }
 
     private static final class Prepared {
@@ -55,6 +60,7 @@ public final class FaceEngine implements AutoCloseable {
 
     FaceEngine(File detector, File recognizer, boolean preferAccelerator, File cacheDir, android.content.res.AssetManager assets) throws Exception {
         env = OrtEnvironment.getEnvironment();
+        fallbackRecognizerModel = recognizer;
         profileDir = new File(cacheDir, "onnx-profiler");
         if (!profileDir.exists()) profileDir.mkdirs();
         GpuFaceDetector gpu = null;
@@ -77,18 +83,23 @@ public final class FaceEngine implements AutoCloseable {
         det = d == null ? null : d.session;
         detNnapi = d != null && d.nnapi;
         if (gpu != null) providerNotes[0] = "检测: ncnn Vulkan GPU（已检测到 Vulkan GPU 并加载 SCRFD-10G 模型）";
-        Prepared r;
-        try {
-            r = openSession(recognizer, gpu == null && preferAccelerator, "recognizer", 1);
-        } catch (Exception e) {
-            if (det != null) det.close();
-            if (gpu != null) gpu.close();
-            throw e;
+        vulkanRecognitionActive = gpu != null && gpu.hasRecognizer();
+        Prepared r=null;
+        if (!vulkanRecognitionActive) {
+            try {
+                r = openSession(recognizer, gpu==null && preferAccelerator, "recognizer", 1);
+            } catch(Exception e) {
+                if(det!=null)det.close();
+                if(gpu!=null)gpu.close();
+                throw e;
+            }
+        } else {
+            providerNotes[1]="识别: ncnn Vulkan ArcFace R50（已加载并校验输出形状）";
         }
-        rec = r.session;
-        recNnapi = r.nnapi;
-        detInput = det == null ? "" : det.getInputNames().iterator().next();
-        recInput = rec.getInputNames().iterator().next();
+        rec = r==null?null:r.session;
+        recNnapi = r!=null && r.nnapi;
+        detInput = det==null?"":det.getInputNames().iterator().next();
+        recInput = rec==null?"":rec.getInputNames().iterator().next();
     }
 
     private Prepared openSession(File model, boolean preferAccelerator, String tag, int index) throws Exception {
@@ -134,6 +145,10 @@ public final class FaceEngine implements AutoCloseable {
         StringBuilder details = new StringBuilder();
         for (int i=0; i<2; i++) {
             OrtSession session = i==0 ? det : rec;
+            if(session==null && i==1 && vulkanRecognitionActive) {
+                details.append("识别: ncnn Vulkan ArcFace 完成 ").append(vulkanRecognitionCalls).append(" 次（不经过 ORT）。");
+                continue;
+            }
             if (session == null && i==0 && vulkan != null) {
                 details.append("检测: ncnn Vulkan GPU 已启用，不经过 ORT 记录事件。\n");
                 continue;
@@ -160,7 +175,9 @@ public final class FaceEngine implements AutoCloseable {
             if(i==0)details.append("\n");
         }
         if(vulkan != null) {
-            profileStatus = "已启用 ncnn Vulkan GPU 人脸检测；ArcFace 特征提取仍在 ONNX Runtime。\n" + details;
+            profileStatus = vulkanRecognitionActive
+                ? "Vulkan GPU 人脸检测和 ArcFace 均已启用。\n" + details
+                : "Vulkan GPU 人脸检测已启用；ArcFace 已回退 ONNX CPU。\n" + details;
         } else if(accelerationEvents>0) {
             profileStatus = "已确认 NNAPI 承接部分算子（但无法仅凭此确定是 GPU 还是 NPU）。\n" + details;
         } else if (detNnapi || recNnapi) {
@@ -202,31 +219,62 @@ public final class FaceEngine implements AutoCloseable {
         detectionNs+=tick()-detectionStart;
         ArrayList<Face> faces = new ArrayList<>();
         for (Candidate c : candidates) {
-            long prepareStart=tick();
-            Bitmap crop = align(original, c.landmarks);
-            try (OnnxTensor tensor = imageTensor(crop, REC, 127.5f)) {
-                preparationNs+=tick()-prepareStart;
-                long recognitionStart=tick();
-                try (OrtSession.Result result = rec.run(Collections.singletonMap(recInput, tensor))) {
-                    recognitionNs+=tick()-recognitionStart;
-                    recognitionCalls++;
-                    long postStart=tick();
-                    try {
-                        FloatBuffer buffer = ((OnnxTensor)result.get(0)).getFloatBuffer();
-                        float[] vec = new float[buffer.remaining()];
-                        buffer.get(vec);
-                        double mag = 0;
-                        for (float v: vec) mag += v * v;
-                        mag = Math.sqrt(mag);
-                        if (mag < 1e-7) continue;
-                        for (int j=0; j<vec.length; j++) vec[j] /= (float)mag;
-                        faces.add(new Face(c.bbox, vec, c.score));
-                    } finally {postNs+=tick()-postStart;}
-                }
-            } finally { crop.recycle(); }
+            long prepStart=tick();
+            Bitmap crop=align(original,c.landmarks);
+            try {
+                preparationNs+=tick()-prepStart;
+                float[] embedding=recognitionEmbedding(crop);
+                if(embedding==null||embedding.length!=512)continue;
+                long postStart=tick();
+                try {
+                    double magnitude=0;
+                    for(float value:embedding)magnitude+=value*value;
+                    magnitude=Math.sqrt(magnitude);
+                    if(magnitude<1e-7)continue;
+                    for(int j=0;j<embedding.length;j++)embedding[j]/=(float)magnitude;
+                    faces.add(new Face(c.bbox,embedding,c.score));
+                } finally {postNs+=tick()-postStart;}
+            } finally {crop.recycle();}
         }
         return faces;
     }
+    private float[] recognitionEmbedding(Bitmap crop) throws Exception {
+        if(vulkanRecognitionActive && vulkan!=null) {
+            long started=tick();
+            float[] result=null;
+            try {result=vulkan.recognize(crop);}
+            catch(Throwable failure) {
+                providerNotes[1]="识别: Vulkan 异常，回退 ONNX CPU: "+failure.getClass().getSimpleName();
+            } finally {
+                recognitionNs+=tick()-started;
+                recognitionCalls++;
+            }
+            if(result!=null && result.length==512) {
+                vulkanRecognitionCalls++;
+                return result;
+            }
+            vulkanRecognitionActive=false;
+            providerNotes[1]="识别: Vulkan ArcFace 输出异常，回退 ONNX CPU";
+        }
+        if(rec==null) {
+            Prepared fallback=openSession(fallbackRecognizerModel,false,"recognizer",1);
+            rec=fallback.session;
+            recInput=rec.getInputNames().iterator().next();
+        }
+        long prepStart=tick();
+        try(OnnxTensor tensor=imageTensor(crop,REC,127.5f)) {
+            preparationNs+=tick()-prepStart;
+            long started=tick();
+            try(OrtSession.Result output=rec.run(Collections.singletonMap(recInput,tensor))) {
+                recognitionNs+=tick()-started;recognitionCalls++;
+                FloatBuffer buffer=((OnnxTensor)output.get(0)).getFloatBuffer();
+                float[] vec=new float[buffer.remaining()];
+                buffer.get(vec);
+                return vec;
+            }
+        }
+    }
+
     private List<Candidate> vulkanCandidates(Bitmap original) {
         float[] packed = vulkan.detect(original);
         ArrayList<Candidate> faces = new ArrayList<>();
@@ -337,5 +385,5 @@ public final class FaceEngine implements AutoCloseable {
         canvas.drawBitmap(src,transform,new Paint(Paint.FILTER_BITMAP_FLAG));
         return face;
     }
-    @Override public void close() throws Exception { if(det!=null)det.close();rec.close();if(vulkan!=null)vulkan.close(); }
+    @Override public void close() throws Exception { if(det!=null)det.close();if(rec!=null)rec.close();if(vulkan!=null)vulkan.close(); }
 }

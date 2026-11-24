@@ -69,3 +69,13 @@ Source algorithm inspiration: InsightFace SCRFD and ArcFace inference, original 
 - APKs use a permanent release signing key instead of ephemeral debug signing. Package ID remains unchanged. Upgrading from the older debug-signed APK may require one last uninstall. Later releases using the same key and increasing versionCode can be installed over the previous release.
 - Configure repository Actions secrets `VFS_SIGNING_KEYSTORE_B64` (base64 PKCS12 file) and `VFS_SIGNING_PASSWORD`. Alias: `vfs-release`. Keep the keystore and password in a private backup; never commit either to git. The CI verifies the expected certificate SHA-256 before publishing signed APKs. If both secrets are absent, CI produces only an explicitly unsigned local-signing artifact, not a randomly signed installable APK.
 - Pinned release certificate SHA-256: `ec20e4038b5fa1ed6c2a4b13452d4d70ad11aaae6599a8b569e49cb00a260a45`.
+
+## v0.6.0: Vulkan ArcFace R50, no recognition model downgrade
+
+- Uses `pnnx` in GitHub Actions to convert original InsightFace `buffalo_l/w600k_r50.onnx` to ncnn **FP32**, preserving weights, 112x112 RGB input and 512-dimensional embeddings.
+- GPU detector SCRFD-10G and ArcFace R50 share ncnn Vulkan backend, while MediaCodec decoding stays as in v0.5.0.
+- GPU ArcFace init probes 512 float outputs. On loading/execution error, it reverts to original ONNX Runtime CPU within the same scan.
+- Reports count of ArcFace recognition calls completed on Vulkan; exact acceleration, accuracy and latency require a physical device test.
+- Converts/bundles the FP32 ArcFace model in the APK at build time. Expect significantly larger APK size, first model download is still the original buffalo_l pack for fallback.
+- Fixed signing is unchanged. To install over v0.5.0 without uninstalling, configure `VFS_SIGNING_KEYSTORE_B64` and `VFS_SIGNING_PASSWORD` repository Secrets with the original v0.5.0 signing backup. Without them CI will publish unsigned artifacts only, not a new random signature.
+- 17-second processing target for a 17-second input is **not guaranteed**; verify under the same phone and test video, compare threshold scores and false matches.

@@ -15,6 +15,16 @@ public final class GpuFaceDetector implements AutoCloseable {
     GpuFaceDetector(AssetManager assets) { ready = nativeInit(assets); }
 
     public boolean isReady() { return ready; }
+    public boolean hasRecognizer(){return ready && nativeHasRecognizer();}
+    public float[] recognize(Bitmap aligned){
+        if(!ready)return null;
+        Bitmap img=aligned;
+        if(aligned.getConfig()!=Bitmap.Config.ARGB_8888)
+            img=aligned.copy(Bitmap.Config.ARGB_8888,false);
+        if(img==null)return null;
+        try{return nativeRecognize(img);}
+        finally{if(img!=aligned)img.recycle();}
+    }
 
     public float[] detect(Bitmap image) {
         if(!ready) return new float[0];
@@ -31,5 +41,7 @@ public final class GpuFaceDetector implements AutoCloseable {
     }
     private native boolean nativeInit(AssetManager assets);
     private native float[] nativeDetect(Bitmap bmp);
+    private native boolean nativeHasRecognizer();
+    private native float[] nativeRecognize(Bitmap aligned);
     private native void nativeClose();
 }

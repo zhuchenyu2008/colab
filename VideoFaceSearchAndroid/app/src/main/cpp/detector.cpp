@@ -12,6 +12,7 @@
 #include <memory>
 #include <vector>
 #include <cstring>
+#include "arcface_io.h"
 
 #define LOG(...) __android_log_print(ANDROID_LOG_INFO, "VfsNcnn", __VA_ARGS__)
 
@@ -22,6 +23,7 @@ struct Face {
     std::array<float,10> kps;
 };
 std::unique_ptr<ncnn::Net> g_net;
+std::unique_ptr<ncnn::Net> g_arcface;
 bool g_gpu = false;
 
 float iou(const Face& a,const Face& b) {
@@ -79,6 +81,7 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_cn_zhuchenyu_videofacesearch_GpuFaceDetector_nativeInit(
         JNIEnv* env,jobject self,jobject assets) {
     (void)self;
+    g_arcface.reset();
     g_net.reset();
     if(g_gpu){ncnn::destroy_gpu_instance();g_gpu=false;}
     if(!assets) return JNI_FALSE;
@@ -103,7 +106,34 @@ Java_cn_zhuchenyu_videofacesearch_GpuFaceDetector_nativeInit(
         return JNI_FALSE;
     }
     g_net=std::move(net);
-    LOG("Vulkan face detector ready");
+    // Convert the exact original w600k_r50.onnx (FP32) during CI.
+    // If Vulkan ArcFace initialization fails, detector continues unaffected.
+    std::unique_ptr<ncnn::Net> arc(new ncnn::Net());
+    arc->opt.use_vulkan_compute=true;
+    arc->opt.use_fp16_storage=false;
+    arc->opt.use_fp16_arithmetic=false;
+    arc->opt.use_fp16_packed=false;
+    arc->opt.num_threads=2;
+    int ap=arc->load_param(manager,"w600k_r50.ncnn.param");
+    int am=ap==0 ? arc->load_model(manager,"w600k_r50.ncnn.bin") : -1;
+    if(ap==0 && am==0) {
+        ncnn::Mat zeros(112,112,3);
+        zeros.fill(0.f);
+        ncnn::Extractor probe=arc->create_extractor();
+        ncnn::Mat output;
+        int status=probe.input(ARC_INPUT_BLOB,zeros);
+        if(status==0) status=probe.extract(ARC_OUTPUT_BLOB,output);
+        if(status==0 && !output.empty() && output.total()==512u && output.elemsize==4u) {
+            g_arcface=std::move(arc);
+            LOG("ArcFace Vulkan 512D output verified");
+        } else {
+            LOG("ArcFace Vulkan probe failed status=%d total=%zu elemsize=%zu",
+                status,output.total(),output.elemsize);
+        }
+    } else {
+        LOG("ArcFace Vulkan failed loading param=%d bin=%d",ap,am);
+    }
+    LOG("Vulkan detector ready (recognizer=%d)",g_arcface?1:0);
     return JNI_TRUE;
 }
 
@@ -165,9 +195,44 @@ Java_cn_zhuchenyu_videofacesearch_GpuFaceDetector_nativeDetect(
     return result;
 }
 
+extern "C" JNIEXPORT jboolean JNICALL
+Java_cn_zhuchenyu_videofacesearch_GpuFaceDetector_nativeHasRecognizer(JNIEnv*,jobject){
+    return g_arcface?JNI_TRUE:JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_cn_zhuchenyu_videofacesearch_GpuFaceDetector_nativeRecognize(
+        JNIEnv* env,jobject,jobject bitmap){
+    if(!g_arcface||!bitmap)return nullptr;
+    AndroidBitmapInfo info;
+    if(AndroidBitmap_getInfo(env,bitmap,&info)!=ANDROID_BITMAP_RESULT_SUCCESS ||
+       info.format!=ANDROID_BITMAP_FORMAT_RGBA_8888 || info.width!=112 || info.height!=112)
+        return nullptr;
+    void* raw=nullptr;
+    if(AndroidBitmap_lockPixels(env,bitmap,&raw)!=ANDROID_BITMAP_RESULT_SUCCESS)return nullptr;
+    std::vector<unsigned char> tight((size_t)112*112*4);
+    const unsigned char* pixels=static_cast<const unsigned char*>(raw);
+    for(int y=0;y<112;y++)
+        memcpy(tight.data()+y*112*4,pixels+y*info.stride,112*4);
+    AndroidBitmap_unlockPixels(env,bitmap);
+    ncnn::Mat input=ncnn::Mat::from_pixels(tight.data(),ncnn::Mat::PIXEL_RGBA2RGB,112,112);
+    const float means[3]={127.5f,127.5f,127.5f};
+    const float norms[3]={1.f/127.5f,1.f/127.5f,1.f/127.5f};
+    input.substract_mean_normalize(means,norms);
+    ncnn::Extractor ex=g_arcface->create_extractor();
+    if(ex.input(ARC_INPUT_BLOB,input)!=0)return nullptr;
+    ncnn::Mat output;
+    if(ex.extract(ARC_OUTPUT_BLOB,output)!=0 || output.empty() ||
+       output.total()!=512u || output.elemsize!=4u)return nullptr;
+    jfloatArray result=env->NewFloatArray(512);
+    if(result) env->SetFloatArrayRegion(result,0,512,(const float*)output.data);
+    return result;
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_cn_zhuchenyu_videofacesearch_GpuFaceDetector_nativeClose(
         JNIEnv*,jobject) {
+    g_arcface.reset();
     g_net.reset();
     if(g_gpu){ ncnn::destroy_gpu_instance();g_gpu=false; }
 }
