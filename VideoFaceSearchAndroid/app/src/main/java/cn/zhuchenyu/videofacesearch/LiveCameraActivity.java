@@ -109,7 +109,7 @@ public final class LiveCameraActivity extends ComponentActivity {
         FrameLayout.LayoutParams hintParams=new FrameLayout.LayoutParams(-1,-2,Gravity.TOP);
         cameraFrame.addView(hint,hintParams);
         root.addView(cameraFrame);
-        TextView legend=label("青色：检测人脸   /   绿色：达到候选阈值",12,false);
+        TextView legend=label("青色：普通人脸   /   红色：达到匹配阈值（同时闪烁红色边框）",12,false);
         legend.setTextColor(COLOR_MUTED);root.addView(legend);
 
         TextView referenceTitle=label("01  /  参考人脸",16,true);
@@ -409,7 +409,8 @@ public final class LiveCameraActivity extends ComponentActivity {
             runOnUiThread(()->{
                 if(run==generation.get()&&started){
                     metrics.setText(info);
-                    matchStatus.setText(match);
+                    matchStatus.setText(n>0?"出现匹配目标 · "+match:match);
+                    matchStatus.setTextColor(n>0?0xFFFF5364:COLOR_TEXT);
                     overlayView.show(faces,referenceEmbedding,imageW,imageH,THRESHOLD);
                     if(newScreenshot)renderGallery();
                 }

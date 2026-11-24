@@ -99,3 +99,11 @@ Source algorithm inspiration: InsightFace SCRFD and ArcFace inference, original 
 - ncnn detection SCRFD-10G remains bundled because the much smaller model is required to start the GPU detector.
 - Do not uninstall; uninstalling deletes the persistent model and candidate gallery. If migration does not finish due to storage space, keep v0.8.0 until it succeeds.
 - If the ncnn backend is updated to a model with different blob names, regenerate `arcface_io.h` using `tools/arcface_model_io.py` and a fresh conversion and repeat model migration.
+
+## v0.8.2: real-time candidate alert
+
+- Ordinary detected faces retain cyan L-shaped corners.
+- Faces that meet the existing 0.48 similarity threshold now get bright **red** corners and a red candidate-score badge (rather than green).
+- Whenever a sampled frame contains at least one above-threshold candidate, the live camera preview displays a pulsing **red border** and the exact Chinese title **"出现匹配目标"** with a smaller "请人工核验" disclaimer.
+- The red alert stops immediately when a newly analyzed frame contains no matching candidate, or after 1.6 seconds without a fresh result. No change to model, threshold, adaptive 5-frame sampling, candidate crop storage, or private model reuse.
+- Build as v0.8.2/versionCode 10 with the existing persistent signing certificate so it can install over v0.8.1.
