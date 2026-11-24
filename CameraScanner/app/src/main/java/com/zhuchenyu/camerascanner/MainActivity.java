@@ -155,8 +155,8 @@ public class MainActivity extends Activity {
         volatile boolean onvif,rtsp,mdns,vendor,ssdp;
         Device(String a){ip=a;}
         boolean mediaPort(){for(int p:new int[]{554,8554,10554,8555,5544,7447,7448,8556,7070,10555,7554})if(ports.contains(p))return true;return false;}
-        int score(){return onvif?95:rtsp?85:mdns?70:mediaPort()?(vendor?60:35):vendor?40:ssdp?30:0;}
-        String type(){return onvif?"ONVIF 视频设备":rtsp?"已确认 RTSP 服务":mdns?"mDNS 视频服务":mediaPort()?"视频常用端口开放（待确认）":score()>0?"疑似网络设备":"其他响应设备";}
+        int score(){return onvif?95:rtsp?85:mdns?75:(vendor&&mediaPort())?55:vendor?25:0;}
+        String type(){return onvif?"ONVIF 视频设备":rtsp?"已确认 RTSP 服务":mdns?"已发现视频服务":vendor?"厂商特征待复核":mediaPort()?"仅常用端口可连接（不代表摄像头）":"其他网络服务";}
     }
     private static class Session{
         final Scope sc;final boolean deep;final AtomicBoolean cancelled=new AtomicBoolean();
@@ -165,9 +165,8 @@ public class MainActivity extends Activity {
         final AtomicInteger done=new AtomicInteger();
         final AtomicInteger attempts=new AtomicInteger(),open=new AtomicInteger(),timeouts=new AtomicInteger(),refused=new AtomicInteger(),other=new AtomicInteger();
         final ConcurrentHashMap<String,AtomicInteger> errors=new ConcurrentHashMap<>();
-        final AtomicBoolean plainRoute=new AtomicBoolean(false);
-        final AtomicInteger plainFallbackAttempts=new AtomicInteger(),plainFallbackConnected=new AtomicInteger();
-        volatile String activeTransport="Wi-Fi 绑定";
+        final AtomicBoolean networkBlocked=new AtomicBoolean(false);
+        volatile String activeTransport="物理 Wi-Fi 直连（不经 VPN）";
         void logError(String label,Throwable ex){
             String reason=ex.getClass().getSimpleName();
             if(ex.getMessage()!=null)reason+=": "+ex.getMessage();
@@ -187,9 +186,31 @@ public class MainActivity extends Activity {
         Session(Scope s,boolean d){sc=s;deep=d;}
         Device get(String ip){return devices.computeIfAbsent(ip,Device::new);}
     }
+    private boolean preflightPhysicalWifi(Session s){
+        if(s.sc.gateway==0){s.notes.add("没有获取到网关，直接测试实际 Wi-Fi 子网");return true;}
+        String gateway=address(s.sc.gateway);
+        try(Socket test=s.sc.net.getSocketFactory().createSocket()){
+            try{
+                test.connect(new InetSocketAddress(gateway,80),1200);
+                s.notes.add("Wi-Fi 直连预检：可连接网关");
+            }catch(ConnectException e){
+                s.notes.add("Wi-Fi 直连预检：网关端口拒绝（说明已到达网关）");
+            }catch(SocketTimeoutException e){
+                s.notes.add("Wi-Fi 直连预检：网关 HTTP 端口无响应，继续尝试设备");
+            }
+            return true;
+        }catch(Exception e){
+            s.logError("Wi-Fi 直连预检",e);
+            s.notes.add("无法通过实际 Wi-Fi 建立扫描连接："+e.getClass().getSimpleName()+" "+String.valueOf(e.getMessage()));
+            if(s.sc.hasVpn)s.notes.add("检测到 VPN；请在 VPN 的按应用分流中排除本 APP，或临时关闭 VPN 后再扫描。不会经 VPN 默认网络继续扫描。");
+            s.networkBlocked.set(true);
+            return false;
+        }
+    }
     private void runScan(Session s){
         WifiManager.MulticastLock lock=null;
         try{
+            if(!preflightPhysicalWifi(s))return;
             WifiManager wm=(WifiManager)getApplicationContext().getSystemService(WIFI_SERVICE);
             if(wm!=null){lock=wm.createMulticastLock("camera-discovery");lock.setReferenceCounted(false);lock.acquire();}
             Future<?> onvif=s.pool.submit(()->udpDiscovery(s,true));
@@ -207,39 +228,18 @@ public class MainActivity extends Activity {
         finally{if(lock!=null&&lock.isHeld())lock.release();s.pool.shutdownNow();ui.post(()->finish(s));}
     }
     private Socket connectOnRoute(Session s,String ip,int port,int timeout) throws IOException {
-        // Physical Wi-Fi route is preferred to bypass a VPN tunnel. If the OS refuses
-        // to bind its socket, test the ordinary route and switch when it is usable.
-        boolean plain=s.plainRoute.get();
+        // Never fall back to an unbound socket. That socket can be redirected through a
+        // VPN transparent proxy, which falsely reports all hosts and ports as open.
+        Socket sock=null;
         try{
-            Socket socket=plain?new Socket():s.sc.net.getSocketFactory().createSocket();
-            try{
-                socket.connect(new InetSocketAddress(ip,port),timeout);
-                return socket;
-            }catch(IOException|RuntimeException e){
-                try{socket.close();}catch(IOException ignored){}
-                throw e;
-            }
-        }catch(IOException e){
-            s.logError(plain?"默认路由":"Wi-Fi 绑定",e);
-            if(!plain && !(e instanceof SocketTimeoutException) && !(e instanceof ConnectException)
-                    && s.plainFallbackAttempts.getAndIncrement()<12){
-                Socket fallback=new Socket();
-                try{
-                    fallback.connect(new InetSocketAddress(ip,port),timeout);
-                    s.plainRoute.set(true);
-                    s.activeTransport="默认网络路由（已自动切换）";
-                    s.plainFallbackConnected.incrementAndGet();
-                    return fallback;
-                }catch(IOException alt){
-                    try{fallback.close();}catch(IOException ignored){}
-                    s.logError("默认路由对照",alt);
-                    // Refused/timeout proves the default-route connect was executed,
-                    // while the Wi-Fi-bound socket produced a routing error.
-                    if(alt instanceof SocketTimeoutException||alt instanceof ConnectException){
-                        s.plainRoute.set(true);
-                        s.activeTransport="默认网络路由（自动切换）";
-                    }
-                }
+            sock=s.sc.net.getSocketFactory().createSocket();
+            sock.connect(new InetSocketAddress(ip,port),timeout);
+            return sock;
+        }catch(IOException|RuntimeException e){
+            if(sock!=null)try{sock.close();}catch(IOException ignored){}
+            s.logError("Wi-Fi 物理网络连接",e);
+            if(e.getMessage()!=null && (e.getMessage().contains("EPERM")||e.getMessage().contains("Binding socket to network"))){
+                s.networkBlocked.set(true);
             }
             throw e;
         }
@@ -249,7 +249,7 @@ public class MainActivity extends Activity {
             ?new int[]{554,8554,10554,8555,5544,7447,7448,8556,7070,10555,7554,80,81,443,8080,8081,8090,8000,5000,8888,8899,9000,37777,34567}
             :new int[]{554,8554,10554,8555,5544,80,443,8080,8000};
         for(int port:ports){
-            if(s.cancelled.get()||Thread.currentThread().isInterrupted())return;
+            if(s.cancelled.get()||s.networkBlocked.get()||Thread.currentThread().isInterrupted())return;
             s.attempts.incrementAndGet();
             try(Socket sock=connectOnRoute(s,ip,port,s.deep?850:600)){
                 s.open.incrementAndGet();
@@ -291,7 +291,7 @@ public class MainActivity extends Activity {
         return response!=null && response.matches("(?is)^\\s*RTSP/\\d+\\.\\d+\\s+\\d{3}.*");
     }
     private String tryAlternativeRtsp(Session s,String ip,int port){
-        if(s.cancelled.get())return "";
+        if(s.cancelled.get()||s.networkBlocked.get())return "";
         try(Socket sock=connectOnRoute(s,ip,port,1100)){
             sock.setSoTimeout(1200);
             return exchange(sock,"OPTIONS * RTSP/1.0\r\nCSeq: 2\r\nUser-Agent: CameraScanner/1.0\r\n\r\n");
@@ -313,7 +313,7 @@ public class MainActivity extends Activity {
     private void udpDiscovery(Session s,boolean onvif){
         try(DatagramSocket sock=new DatagramSocket(null)){
             try{s.sc.net.bindSocket(sock);}
-            catch(Exception e){s.logError("UDP Wi-Fi 绑定",e);s.notes.add("UDP Wi-Fi 绑定失败，尝试系统默认路由");}
+            catch(Exception e){s.logError("UDP Wi-Fi 绑定",e);s.notes.add("UDP 物理 Wi-Fi 绑定失败，已跳过此协议，不使用 VPN 默认路由");return;}
             sock.bind(new InetSocketAddress(0));sock.setSoTimeout(350);
             String payload=onvif?"<?xml version=\"1.0\" encoding=\"UTF-8\"?><s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\" xmlns:a=\"http://schemas.xmlsoap.org/ws/2004/08/addressing\" xmlns:d=\"http://schemas.xmlsoap.org/ws/2005/04/discovery\" xmlns:dn=\"http://www.onvif.org/ver10/network/wsdl\"><s:Header><a:MessageID>urn:uuid:"+UUID.randomUUID()+"</a:MessageID><a:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</a:To><a:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</a:Action></s:Header><s:Body><d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe></s:Body></s:Envelope>":"M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: ssdp:all\r\n\r\n";
             byte[] b=payload.getBytes(StandardCharsets.UTF_8);
@@ -375,29 +375,31 @@ public class MainActivity extends Activity {
     }
     private void render(Session s,boolean complete){
         if(current!=s)return;
-        List<Device> list=sorted(s);long candidates=list.stream().filter(d->d.score()>0).count();
-        counts.setText(list.size()+" 个已发现 · "+candidates+" 个候选");
+        List<Device> list=sorted(s);long confirmed=list.stream().filter(d->d.onvif||d.rtsp||d.mdns).count();
+        counts.setText(confirmed+" 个协议确认 · "+list.size()+" 个有响应 IP");
         progress.setProgress(complete&&!s.cancelled.get()?100:Math.min(99,100*s.done.get()/Math.max(1,s.total)));
         if(!complete)status.setText("扫描 "+s.done.get()+" / "+s.total+" 个 IP · TCP已连接 "+s.open.get()+" 次");
-        if(complete)status.setText("扫描结束 · TCP 已连接 "+s.open.get()+" 次 · 错误 "+s.other.get()+" 次 · "+s.activeTransport);
+        if(complete)status.setText(s.networkBlocked.get()?"检测中止：系统禁止绑定实际 Wi-Fi，未生成设备结论":"扫描结束 · 实际 Wi-Fi TCP 连接 "+s.open.get()+" 次");
         results.removeAllViews();
         if(complete){
             String finding;
-            if(s.cancelled.get())finding="扫描被中断，下面显示的是部分检测结果。";
+            if(s.networkBlocked.get())finding="系统拒绝 APP 绑定实际 Wi-Fi（EPERM）。已停止扫描，避免通过 VPN/透明代理产生虚假设备。请关闭 VPN 或在 VPN 的按应用分流中将本 APP 排除，然后重试。";
+            else if(s.cancelled.get())finding="扫描被用户停止，仅显示部分结果。";
             else if(s.devices.isEmpty()&&s.open.get()==0)finding="没有任何端口连接成功。可能是 Wi-Fi 设备隔离、目标不在同一子网、非标准端口、连接被防火墙阻止或网络权限问题；这不代表没有摄像头。";
             else if(list.stream().noneMatch(d->d.onvif||d.rtsp||d.mdns))finding="已完成探测，但没有收到可确认的摄像头协议。可再使用深度扫描扩展端口和 IP 范围；开放端口不等于摄像头。";
             else finding="已发现协议证据；请根据每台设备列出的具体证据判断。";
             String testedPorts=s.deep?"554,8554,10554,8555,5544,7447,7448,8556,7070,10555,7554,80,81,443,8080,8081,8090,8000,5000,8888,8899,9000,37777,34567":"554,8554,10554,8555,5544,80,443,8080,8000";
-            TextView diag=text("网络："+s.sc.networkSummary()+"\n检测 IP："+s.done.get()+"/"+s.total+" · TCP 尝试："+s.attempts.get()+" · 成功："+s.open.get()+"\n连接超时："+s.timeouts.get()+" · 拒绝："+s.refused.get()+" · 其他错误："+s.other.get()+"\n扫描端口："+testedPorts+"\n结果分析："+finding+"\n连接方式："+s.activeTransport+" · 默认路由成功 "+s.plainFallbackConnected.get()+" 次\n真实异常类型（最多 14 类）：\n"+s.errorSummary()+"\n发现协议问题："+s.notes,12,MUTED,false);
+            TextView diag=text("网络："+s.sc.networkSummary()+"\n检测 IP："+s.done.get()+"/"+s.total+" · TCP 尝试："+s.attempts.get()+" · 成功："+s.open.get()+"\n连接超时："+s.timeouts.get()+" · 拒绝："+s.refused.get()+" · 其他错误："+s.other.get()+"\n扫描端口："+testedPorts+"\n结果分析："+finding+"\n连接方式："+s.activeTransport+" · Wi-Fi 直连受阻："+s.networkBlocked.get()+"\n真实异常类型（最多 14 类）：\n"+s.errorSummary()+"\n发现协议问题："+s.notes,12,MUTED,false);
             diag.setPadding(dp(8),dp(8),dp(8),dp(12));results.addView(diag);
         }
-        if(list.isEmpty())results.addView(text(complete?"未发现响应设备；网络隔离或设备休眠可能造成漏检。":"正在等待设备响应…",14,MUTED,false));
+        if(list.isEmpty())results.addView(text(s.networkBlocked.get()?"网络受系统限制，扫描未完成（不是未发现摄像头）":complete?"未发现响应设备；网络隔离或设备休眠仍可能造成漏检。":"正在等待设备响应…",14,MUTED,false));
         for(Device d:list){
             LinearLayout card=new LinearLayout(this);card.setOrientation(1);card.setPadding(dp(12),dp(10),dp(12),dp(10));card.setBackground(shape(PANEL,12));
             LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);p.setMargins(0,0,0,dp(7));results.addView(card,p);
             card.addView(text(d.ip+"   "+d.type(),16,d.onvif?GREEN:d.score()>0?AMBER:FG,true));
             card.addView(text("规则分 "+d.score()+"/100 · 端口 "+d.ports,12,MUTED,false));
-            for(String e:d.evidence)card.addView(text("• "+e,12,FG,false));
+            int shown=0;for(String e:d.evidence){if(!d.onvif&&!d.rtsp&&!d.mdns&&shown>=4)break;card.addView(text("• "+e,12,FG,false));shown++;}
+            if(shown<d.evidence.size())card.addView(text("其他 "+(d.evidence.size()-shown)+" 条端口记录可在导出 JSON 中查看",12,MUTED,false));
         }
     }
     private void finish(Session s){
@@ -405,14 +407,15 @@ public class MainActivity extends Activity {
         render(s,true);List<Device> list=sorted(s);Set<String> now=new HashSet<>();JSONArray records=new JSONArray();
         try{
             for(Device d:list){if(d.score()>0)now.add(d.ip);JSONObject j=new JSONObject();j.put("ip",d.ip);j.put("type",d.type());j.put("ruleScore",d.score());j.put("evidence",new JSONArray(d.evidence));j.put("ports",new JSONArray(d.ports));records.put(j);}
-            JSONObject report=new JSONObject();report.put("scope",s.sc.label());report.put("wifiIp",address(s.sc.ip));report.put("wifiActualPrefix",s.sc.actualPrefix);report.put("wifiGateway",s.sc.gateway==0?"":address(s.sc.gateway));report.put("vpnDetected",s.sc.hasVpn);report.put("timestamp",System.currentTimeMillis());report.put("cancelled",s.cancelled.get());report.put("testedHosts",s.done.get());report.put("totalHosts",s.total);report.put("tcpAttempts",s.attempts.get());report.put("tcpOpen",s.open.get());report.put("tcpTimeouts",s.timeouts.get());report.put("tcpRefused",s.refused.get());report.put("tcpOther",s.other.get());report.put("transport",s.activeTransport);report.put("defaultRouteFallbackConnected",s.plainFallbackConnected.get());report.put("errorDetails",s.errorSummary());report.put("devices",records);report.put("notes",new JSONArray(s.notes));lastJson=report.toString(2);
+            JSONObject report=new JSONObject();report.put("scope",s.sc.label());report.put("wifiIp",address(s.sc.ip));report.put("wifiActualPrefix",s.sc.actualPrefix);report.put("wifiGateway",s.sc.gateway==0?"":address(s.sc.gateway));report.put("vpnDetected",s.sc.hasVpn);report.put("timestamp",System.currentTimeMillis());report.put("cancelled",s.cancelled.get());report.put("testedHosts",s.done.get());report.put("totalHosts",s.total);report.put("tcpAttempts",s.attempts.get());report.put("tcpOpen",s.open.get());report.put("tcpTimeouts",s.timeouts.get());report.put("tcpRefused",s.refused.get());report.put("tcpOther",s.other.get());report.put("transport",s.activeTransport);report.put("networkBlocked",s.networkBlocked.get());report.put("scanTrustworthy",!s.networkBlocked.get()&&!s.cancelled.get());report.put("errorDetails",s.errorSummary());report.put("devices",records);report.put("notes",new JSONArray(s.notes));lastJson=report.toString(2);
             getPreferences(MODE_PRIVATE).edit().putString("last_scan",lastJson).apply();
         }catch(Exception ignored){}
         Set<String> added=new HashSet<>(now);added.removeAll(previous);boolean hadPrevious=!previous.isEmpty();if(!s.cancelled.get())previous=now;
         String msg=s.cancelled.get()?"已停止 · 部分结果":"扫描完成 · 评分非统计概率";
         if(!s.notes.isEmpty())msg+=" · "+s.notes.size()+" 项发现限制";
+        if(s.networkBlocked.get()){watching=false;msg="受系统网络限制：已停止扫描，未识别到真实摄像头";}
         if(watching&&!s.cancelled.get()){msg+=" · 45 秒后再次扫描";if(hadPrevious&&!added.isEmpty()){msg+=" · 新候选 "+added.size();Toast.makeText(this,"新出现的候选设备："+added.size(),Toast.LENGTH_LONG).show();}}
         status.setText(msg);share.setEnabled(true);current=null;scan.setEnabled(!watching);deep.setEnabled(!watching);monitor.setEnabled(true);stop.setEnabled(watching);
-        if(watching&&!s.cancelled.get())ui.postDelayed(next,45000);else{watching=false;monitor.setText("持续监测");}
+        if(watching&&!s.cancelled.get()&&!s.networkBlocked.get())ui.postDelayed(next,45000);else{watching=false;monitor.setText("持续监测");}
     }
 }
