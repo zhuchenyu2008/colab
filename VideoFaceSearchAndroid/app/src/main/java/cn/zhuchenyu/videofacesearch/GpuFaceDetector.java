@@ -2,6 +2,7 @@
 package cn.zhuchenyu.videofacesearch;
 
 import android.content.res.AssetManager;
+import java.io.File;
 import android.graphics.Bitmap;
 
 // Loads ncnn's Vulkan compute backend; independent from ONNX Runtime's NNAPI provider.
@@ -9,10 +10,12 @@ public final class GpuFaceDetector implements AutoCloseable {
     private boolean ready;
     static { System.loadLibrary("vfs_detector"); }
 
-    GpuFaceDetector() { ready = nativeInit(null); }
+    GpuFaceDetector() { ready = nativeInit(null,null,null); }
 
     // AssetManager must be passed from an Android Context. No global activity references.
-    GpuFaceDetector(AssetManager assets) { ready = nativeInit(assets); }
+    GpuFaceDetector(AssetManager assets, File param, File weights) {
+        ready=nativeInit(assets,param.getAbsolutePath(),weights.getAbsolutePath());
+    }
 
     public boolean isReady() { return ready; }
     public boolean hasRecognizer(){return ready && nativeHasRecognizer();}
@@ -39,7 +42,7 @@ public final class GpuFaceDetector implements AutoCloseable {
     @Override public void close() {
         if(ready){nativeClose();ready=false;}
     }
-    private native boolean nativeInit(AssetManager assets);
+    private native boolean nativeInit(AssetManager assets,String paramPath,String weightPath);
     private native float[] nativeDetect(Bitmap bmp);
     private native boolean nativeHasRecognizer();
     private native float[] nativeRecognize(Bitmap aligned);

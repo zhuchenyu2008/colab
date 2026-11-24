@@ -66,7 +66,10 @@ public final class FaceEngine implements AutoCloseable {
         GpuFaceDetector gpu = null;
         if (preferAccelerator) {
             try {
-                gpu = new GpuFaceDetector(assets);
+                File privateModels=cacheDir.getParentFile()==null?cacheDir:new File(cacheDir.getParentFile(),"files/models/ncnn");
+                gpu = new GpuFaceDetector(assets,
+                        new File(privateModels,"w600k_r50.ncnn.param"),
+                        new File(privateModels,"w600k_r50.ncnn.bin"));
                 if (!gpu.isReady()) {
                     providerNotes[0] = "检测 Vulkan 不可用，回退 ONNX Runtime";
                     gpu.close();

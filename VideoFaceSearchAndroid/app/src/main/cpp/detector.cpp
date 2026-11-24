@@ -79,7 +79,7 @@ void decode_stride(ncnn::Extractor& ex,int stride,int width,int height,
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_cn_zhuchenyu_videofacesearch_GpuFaceDetector_nativeInit(
-        JNIEnv* env,jobject self,jobject assets) {
+        JNIEnv* env,jobject self,jobject assets,jstring paramPath,jstring weightPath) {
     (void)self;
     g_arcface.reset();
     g_net.reset();
@@ -114,8 +114,24 @@ Java_cn_zhuchenyu_videofacesearch_GpuFaceDetector_nativeInit(
     arc->opt.use_fp16_arithmetic=false;
     arc->opt.use_fp16_packed=false;
     arc->opt.num_threads=2;
-    int ap=arc->load_param(manager,"w600k_r50.ncnn.param");
-    int am=ap==0 ? arc->load_model(manager,"w600k_r50.ncnn.bin") : -1;
+    int ap=-1,am=-1;
+    // Keep weights in filesDir so upgrading a small APK never loses the GPU model.
+    if(paramPath && weightPath) {
+        const char* param=env->GetStringUTFChars(paramPath,nullptr);
+        const char* weights=env->GetStringUTFChars(weightPath,nullptr);
+        if(param && weights){
+            ap=arc->load_param(param);
+            am=ap==0?arc->load_model(weights):-1;
+        }
+        if(param)env->ReleaseStringUTFChars(paramPath,param);
+        if(weights)env->ReleaseStringUTFChars(weightPath,weights);
+    }
+    // Only the one-time migration installer has the large model packaged as assets.
+    if(ap!=0 || am!=0){
+        arc->clear();
+        ap=arc->load_param(manager,"w600k_r50.ncnn.param");
+        am=ap==0?arc->load_model(manager,"w600k_r50.ncnn.bin"):-1;
+    }
     if(ap==0 && am==0) {
         ncnn::Mat zeros(112,112,3);
         zeros.fill(0.f);
