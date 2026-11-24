@@ -17,8 +17,8 @@ public final class MainActivity extends Activity {
     private Uri photo,video;
     private TextView status,photoLabel,videoLabel,results;
     private Button analyzeButton, exportButton, modelButton;
-    private CheckBox nnapiToggle;
-    private boolean preferAccelerator = true;
+    private CheckBox nnapiToggle,decoderToggle;
+    private boolean preferAccelerator = true, preferSequentialDecoder = true;
     private SeekBar frameIntervalBar;
     private int frameInterval=5;
     private List<VideoAnalyzer.Segment> lastSegments=Collections.emptyList();
@@ -48,6 +48,12 @@ public final class MainActivity extends Activity {
         nnapiToggle.setOnCheckedChangeListener((b,on)->preferAccelerator=on);
         root.addView(nnapiToggle);
         root.addView(label("优先使用 ncnn Vulkan SCRFD 人脸检测，ArcFace 使用 ONNX Runtime；不可用时回退旧版模式。不是全流程 GPU。",12,false));
+        decoderToggle=new CheckBox(this);
+        decoderToggle.setText("MediaCodec 顺序解码（推荐）");
+        decoderToggle.setChecked(true);
+        decoderToggle.setOnCheckedChangeListener((b,on)->preferSequentialDecoder=on);
+        root.addView(decoderToggle);
+        root.addView(label("保留原采样间隔和模型；按实际视频帧时间取样。无法读取 YUV 或 HDR 时回退旧解码。",12,false));
         final TextView intervalText=label("每 5 帧分析一次（默认沿用原项目）",14,false);
         root.addView(intervalText);
         frameIntervalBar=new SeekBar(this);frameIntervalBar.setMax(29);frameIntervalBar.setProgress(4);
@@ -93,6 +99,7 @@ public final class MainActivity extends Activity {
             modelButton.setEnabled(!enabled);analyzeButton.setEnabled(!enabled);
             frameIntervalBar.setEnabled(!enabled);
             nnapiToggle.setEnabled(!enabled);
+            decoderToggle.setEnabled(!enabled);
             exportButton.setEnabled(!enabled && !lastSegments.isEmpty());
         });
     }
@@ -138,7 +145,7 @@ public final class MainActivity extends Activity {
                     q.sort((a,b)->Float.compare(b.confidence,a.confidence));
                     update("参考人脸已提取，开始视频分析...\n"+engine.providerStatus());
                     VideoAnalyzer.Report report=new VideoAnalyzer(this).search(engine,video,q.get(0).embedding,
-                            frameInterval,0.48f,this::update);
+                            frameInterval,0.48f,preferSequentialDecoder,this::update);
                     lastSegments=report.segments;
                     String profile=engine.finishProfiling();
                     long elapsed=android.os.SystemClock.elapsedRealtime()-jobStart;
@@ -146,6 +153,8 @@ public final class MainActivity extends Activity {
                     out.append("总耗时 ").append(elapsed).append(" ms · 视频解码 ")
                        .append(report.decodeMs).append(" ms · 模型推理 ")
                        .append(report.inferenceMs).append(" ms。\n");
+                    out.append("解码后端：").append(report.decoder).append("\n");
+                    if(report.decodedFrames>=0)out.append("顺序解码输出 ").append(report.decodedFrames).append(" 帧（仅采样帧送入模型）。\n");
                     out.append(engine.providerStatus()).append("\n").append(profile).append("\n\n");
                     out.append("已扫描 ").append(report.sampledFrames).append(" 帧，检测人脸 ").append(report.faceCount)
                             .append(" 次，超过阈值的帧内候选 ").append(report.rawHits).append(" 个。\n");

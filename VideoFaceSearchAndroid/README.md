@@ -55,3 +55,10 @@ Source algorithm inspiration: InsightFace SCRFD and ArcFace inference, original 
 - Torch/ONNX input preprocessing and model variants may vary; do not assume scores exactly match v0.2.0. Validate with authorized test data.
 - Build downloads 40MB ncnn Android Vulkan SDK and ~8MB SCRFD model; NDK and CMake required.
 - Debug APK signing may differ across builds; uninstall may be required, clearing the previously downloaded ArcFace pack.
+
+## v0.4.0: sequential video decoding
+
+- Default MediaExtractor + MediaCodec sequential decoding avoids repeatedly seeking for each sample. Only sampled frames are converted to RGB, downscaled to the same maximum 960-pixel dimension. SDR YUV420 crop, stride, range, color matrices, and rotation are handled explicitly.
+- The existing Vulkan SCRFD, CPU ArcFace, similarity threshold, and sampling interval settings are unchanged. Sequential sampling uses actual decoded presentation timestamps, so selected frames/timestamps and numeric scores may differ slightly from the legacy nearest-timestamp path.
+- A UI checkbox retains MediaMetadataRetriever for A/B comparisons. Unsupported formats, HDR, timeout, or decoder output failure trigger a clean restart in legacy mode. Inference errors do not cause a decode restart.
+- Results identify the selected decoder (including the Android hardware-acceleration flag where available), decoded frame count, sampled frame count, and timing. No phone-specific speed claim until measured. Debug signing may require uninstalling the old APK.

@@ -52,11 +52,11 @@ jobs:
         run: gradle -p VideoFaceSearchAndroid :app:assembleDebug --stacktrace
       - name: Package APK
         run: |
-          cp VideoFaceSearchAndroid/app/build/outputs/apk/debug/app-debug.apk VideoFaceSearch-Android-v0.3.0.apk
-          ls -lh VideoFaceSearch-Android-v0.3.0.apk
+          cp VideoFaceSearchAndroid/app/build/outputs/apk/debug/app-debug.apk VideoFaceSearch-Android-v0.4.0.apk
+          ls -lh VideoFaceSearch-Android-v0.4.0.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: VideoFaceSearch-Android-v0.3.0
-          path: VideoFaceSearch-Android-v0.3.0.apk
+          name: VideoFaceSearch-Android-v0.4.0
+          path: VideoFaceSearch-Android-v0.4.0.apk
           if-no-files-found: error
           retention-days: 30
