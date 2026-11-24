@@ -25,9 +25,11 @@ public class MainActivity extends Activity {
     private final Handler ui=new Handler(Looper.getMainLooper());
     private LinearLayout results;
     private TextView networkText, status, counts;
-    private Button scan, deep, monitor, stop, share;
+    private Button scan, deep, monitor, stop, share, otherToggle;
     private ProgressBar progress;
     private volatile Session current;
+    private volatile Session lastSession;
+    private boolean showOther=false;
     private volatile boolean watching=false;
     private String lastJson="";
     private Set<String> previous = new HashSet<>();
@@ -42,10 +44,10 @@ public class MainActivity extends Activity {
         TextView title=text("CAMERA / SCANNER",12,GREEN,true); root.addView(title);
         TextView big=text("局域网摄像头扫描",27,FG,true); root.addView(big);
         networkText=text("正在检查 Wi-Fi…",13,MUTED,false); root.addView(networkText);
-        TextView intro=text("仅扫描自有或获授权的 Wi-Fi 网络。识别设备服务，不访问视频画面。",13,MUTED,false);
+        TextView intro=text("仅识别授权局域网中的视频协议端点；HTTP 和端口开放不算摄像头证据。",13,MUTED,false);
         intro.setPadding(0,dp(8),0,dp(12)); root.addView(intro);
         LinearLayout card=new LinearLayout(this); card.setOrientation(1); card.setPadding(dp(14),dp(12),dp(14),dp(12)); card.setBackground(shape(PANEL,16)); root.addView(card);
-        counts=text("0 个已发现 · 0 个摄像头候选",18,FG,true); card.addView(counts);
+        counts=text("0 个已验证视频端点",18,FG,true); card.addView(counts);
         status=text("准备就绪",13,MUTED,false); status.setPadding(0,dp(8),0,dp(8)); card.addView(status);
         progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal); progress.setMax(100); progress.setProgressTintList(android.content.res.ColorStateList.valueOf(GREEN)); card.addView(progress,new LinearLayout.LayoutParams(-1,dp(8)));
         LinearLayout r1=new LinearLayout(this); root.addView(r1);
@@ -59,7 +61,16 @@ public class MainActivity extends Activity {
         monitor.setOnClickListener(v->{if(watching){halt();}else{confirm(true,true);}});
         stop.setOnClickListener(v->halt());
         share.setOnClickListener(v->{Intent i=new Intent(Intent.ACTION_SEND);i.setType("text/plain");i.putExtra(Intent.EXTRA_TEXT,lastJson);startActivity(Intent.createChooser(i,"导出扫描结果"));});
-        TextView label=text("设备与识别证据",16,FG,true); label.setPadding(0,dp(12),0,dp(5)); root.addView(label);
+        TextView label=text("视频协议检测结果",16,FG,true); label.setPadding(0,dp(12),0,dp(5)); root.addView(label);
+        otherToggle=button("查看其他网络响应（非摄像头证据）",PANEL,MUTED);
+        otherToggle.setVisibility(View.GONE);
+        LinearLayout.LayoutParams ot=new LinearLayout.LayoutParams(-1,dp(44));
+        ot.setMargins(0,0,0,dp(8));root.addView(otherToggle,ot);
+        otherToggle.setOnClickListener(v->{
+            showOther=!showOther;
+            Session session=lastSession;
+            if(session!=null)render(session,session.complete);
+        });
         ScrollView scroll=new ScrollView(this); results=new LinearLayout(this); results.setOrientation(1); scroll.addView(results);
         root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
         results.addView(text("扫描结果将在这里显示。未发现不等于不存在。",14,MUTED,false));
@@ -82,10 +93,10 @@ public class MainActivity extends Activity {
         try{sc=scope(thorough);}catch(Exception e){status.setText("无法开始："+e.getMessage());watching=false;return;}
         if(!previousScope.equals(sc.label())){previous.clear();previousScope=sc.label();}
         networkText.setText(sc.networkSummary());
-        Session s=new Session(sc,thorough);current=s;scan.setEnabled(false);deep.setEnabled(false);
+        Session s=new Session(sc,thorough);current=s;lastSession=s;showOther=false;otherToggle.setVisibility(View.GONE);scan.setEnabled(false);deep.setEnabled(false);
         stop.setEnabled(true);monitor.setEnabled(watching);monitor.setText(watching?"停止监测":"持续监测");
         share.setEnabled(false); progress.setProgress(0);status.setText("正在发现设备与服务…");
-        results.removeAllViews();counts.setText("0 个已发现 · 0 个摄像头候选");
+        results.removeAllViews();counts.setText("0 个已验证视频端点");
         new Thread(()->runScan(s),"camera-discovery").start();
     }
     private void halt(){
@@ -151,12 +162,22 @@ public class MainActivity extends Activity {
         return best;
     }
     private static class Device{
-        final String ip;final Set<String> evidence=new ConcurrentSkipListSet<>();final Set<Integer> ports=new ConcurrentSkipListSet<>();
+        final String ip;
+        final Set<String> evidence=new ConcurrentSkipListSet<>();
+        final Set<Integer> ports=new ConcurrentSkipListSet<>();
         volatile boolean onvif,rtsp,mdns,vendor,ssdp;
         Device(String a){ip=a;}
-        boolean mediaPort(){for(int p:new int[]{554,8554,10554,8555,5544,7447,7448,8556,7070,10555,7554})if(ports.contains(p))return true;return false;}
-        int score(){return onvif?95:rtsp?85:mdns?75:(vendor&&mediaPort())?55:vendor?25:0;}
-        String type(){return onvif?"ONVIF 视频设备":rtsp?"已确认 RTSP 服务":mdns?"已发现视频服务":vendor?"厂商特征待复核":mediaPort()?"仅常用端口可连接（不代表摄像头）":"其他网络服务";}
+        // RTSP OPTIONS identifies a video-control protocol endpoint, not necessarily a physical camera.
+        boolean confirmedVideoProtocol(){return onvif||rtsp;}
+        boolean videoAdvertisementOnly(){return mdns&&!confirmedVideoProtocol();}
+        String category(){return confirmedVideoProtocol()?"VIDEO_PROTOCOL_VERIFIED":videoAdvertisementOnly()?"VIDEO_SERVICE_ADVERTISED":"OTHER_NETWORK_SERVICE";}
+        String type(){
+            if(onvif&&rtsp)return "ONVIF + RTSP 视频端点";
+            if(onvif)return "ONVIF 网络视频端点";
+            if(rtsp)return "RTSP 服务端点";
+            if(mdns)return "mDNS 视频服务广播（未验证）";
+            return "其他网络响应（无摄像头证据）";
+        }
     }
     private static class Session{
         final Scope sc;final boolean deep;final AtomicBoolean cancelled=new AtomicBoolean();
@@ -182,6 +203,7 @@ public class MainActivity extends Activity {
             detail.sort(Comparator.naturalOrder());
             return detail.isEmpty()?"无":android.text.TextUtils.join("\n",detail);
         }
+        volatile boolean complete=false;
         int total;final List<String> notes=Collections.synchronizedList(new ArrayList<>());
         Session(Scope s,boolean d){sc=s;deep=d;}
         Device get(String ip){return devices.computeIfAbsent(ip,Device::new);}
@@ -370,51 +392,97 @@ public class MainActivity extends Activity {
     }
     private List<Device> sorted(Session s){
         List<Device> list=new ArrayList<>(s.devices.values());
-        list.sort(Comparator.comparingInt(Device::score).reversed().thenComparingLong(d->{try{return number(InetAddress.getByName(d.ip));}catch(Exception e){return 0;}}));
+        list.sort(Comparator.comparingInt((Device d)->d.onvif&&d.rtsp?3:d.confirmedVideoProtocol()?2:d.mdns?1:0)
+            .reversed().thenComparingLong(d->{try{return number(InetAddress.getByName(d.ip));}catch(Exception e){return 0;}}));
         return list;
     }
     private void render(Session s,boolean complete){
-        if(current!=s)return;
-        List<Device> list=sorted(s);long confirmed=list.stream().filter(d->d.onvif||d.rtsp||d.mdns).count();
-        counts.setText(confirmed+" 个协议确认 · "+list.size()+" 个有响应 IP");
+        if(lastSession!=s)return;
+        List<Device> all=sorted(s);
+        List<Device> confirmed=new ArrayList<>(),advertised=new ArrayList<>(),other=new ArrayList<>();
+        for(Device d:all){
+            if(d.confirmedVideoProtocol())confirmed.add(d);
+            else if(d.videoAdvertisementOnly())advertised.add(d);
+            else other.add(d);
+        }
+        counts.setText(confirmed.size()+" 个已验证视频端点 · "+advertised.size()+" 个待核实广播");
         progress.setProgress(s.networkBlocked.get()?0:(complete&&!s.cancelled.get()?100:Math.min(99,100*s.done.get()/Math.max(1,s.total))));
-        if(!complete)status.setText("扫描 "+s.done.get()+" / "+s.total+" 个 IP · TCP已连接 "+s.open.get()+" 次");
-        if(complete)status.setText(s.networkBlocked.get()?"检测中止：系统禁止绑定实际 Wi-Fi，未生成设备结论":"扫描结束 · 实际 Wi-Fi TCP 连接 "+s.open.get()+" 次");
+        if(!complete)status.setText("扫描 "+s.done.get()+" / "+s.total+" 个 IP · 发现视频端点 "+confirmed.size()+" 个");
+        if(complete)status.setText(s.networkBlocked.get()?"系统禁止绑定 Wi-Fi，扫描未完成":"扫描完成 · "+confirmed.size()+" 个视频协议端点 · 其他响应 "+other.size()+" 个");
+        otherToggle.setVisibility(other.isEmpty()?View.GONE:View.VISIBLE);
+        otherToggle.setText((showOther?"收起":"查看")+"其他响应 IP（"+other.size()+"）· 不代表摄像头");
         results.removeAllViews();
+        if(confirmed.isEmpty()){
+            String message=s.networkBlocked.get()?"物理 Wi-Fi 被系统限制，不能得出设备结论。":
+                complete?"未收到可验证的 RTSP 或 ONVIF 视频协议响应；不能据此排除摄像头。":"正在扫描视频协议…";
+            TextView empty=text(message,14,MUTED,false);
+            empty.setPadding(dp(6),dp(10),dp(6),dp(12));results.addView(empty);
+        }
+        for(Device d:confirmed)renderDeviceCard(d,true);
+        if(!advertised.isEmpty()){
+            TextView section=text("仅发现视频服务广播（需要进一步验证）",14,AMBER,true);
+            section.setPadding(0,dp(9),0,dp(8));results.addView(section);
+            for(Device d:advertised)renderDeviceCard(d,false);
+        }
+        if(showOther&&!other.isEmpty()){
+            TextView section=text("其他网络响应 · 不能当作摄像头",14,MUTED,true);
+            section.setPadding(0,dp(12),0,dp(8));results.addView(section);
+            for(Device d:other)renderOtherCard(d);
+        }
         if(complete){
+            TextView label=text("诊断数据（不计入摄像头识别）",14,MUTED,true);
+            label.setPadding(0,dp(14),0,dp(6));results.addView(label);
             String finding;
-            if(s.networkBlocked.get())finding="系统拒绝 APP 绑定实际 Wi-Fi（EPERM）。已停止扫描，避免通过 VPN/透明代理产生虚假设备。请关闭 VPN 或在 VPN 的按应用分流中将本 APP 排除，然后重试。";
-            else if(s.cancelled.get())finding="扫描被用户停止，仅显示部分结果。";
-            else if(s.devices.isEmpty()&&s.open.get()==0)finding="没有任何端口连接成功。可能是 Wi-Fi 设备隔离、目标不在同一子网、非标准端口、连接被防火墙阻止或网络权限问题；这不代表没有摄像头。";
-            else if(list.stream().noneMatch(d->d.onvif||d.rtsp||d.mdns))finding="已完成探测，但没有收到可确认的摄像头协议。可再使用深度扫描扩展端口和 IP 范围；开放端口不等于摄像头。";
-            else finding="已发现协议证据；请根据每台设备列出的具体证据判断。";
-            String testedPorts=s.deep?"554,8554,10554,8555,5544,7447,7448,8556,7070,10555,7554,80,81,443,8080,8081,8090,8000,5000,8888,8899,9000,37777,34567":"554,8554,10554,8555,5544,80,443,8080,8000";
-            TextView diag=text("网络："+s.sc.networkSummary()+"\n检测 IP："+s.done.get()+"/"+s.total+" · TCP 尝试："+s.attempts.get()+" · 成功："+s.open.get()+"\n连接超时："+s.timeouts.get()+" · 拒绝："+s.refused.get()+" · 其他错误："+s.other.get()+"\n扫描端口："+testedPorts+"\n结果分析："+finding+"\n连接方式："+s.activeTransport+" · Wi-Fi 直连受阻："+s.networkBlocked.get()+"\n真实异常类型（最多 14 类）：\n"+s.errorSummary()+"\n发现协议问题："+s.notes,12,MUTED,false);
-            diag.setPadding(dp(8),dp(8),dp(8),dp(12));results.addView(diag);
+            if(s.networkBlocked.get())finding="Android 拒绝绑定物理 Wi-Fi。已中止，避免 VPN/代理制造虚假的设备响应。";
+            else if(s.cancelled.get())finding="扫描被用户停止，仅有部分检测数据。";
+            else if(confirmed.isEmpty())finding="尚无视频协议证据；其他设备开放 HTTP/TCP 端口不能说明是摄像头。";
+            else finding="发现了网络视频协议端点；协议确认不等于已经确认物理摄像头。";
+            String detail="Wi-Fi："+s.sc.networkSummary()+"\n检测 IP："+s.done.get()+"/"+s.total+
+                " · TCP 探测："+s.attempts.get()+" · 可连接："+s.open.get()+
+                "\n超时："+s.timeouts.get()+" · 拒绝："+s.refused.get()+" · 其他错误："+s.other.get()+
+                "\n结论："+finding+"\n连接路径："+s.activeTransport+
+                "\n异常摘要："+s.errorSummary()+"\n协议发现备注："+s.notes;
+            TextView diag=text(detail,12,MUTED,false);
+            diag.setPadding(dp(8),dp(4),dp(8),dp(10));results.addView(diag);
         }
-        if(list.isEmpty())results.addView(text(s.networkBlocked.get()?"网络受系统限制，扫描未完成（不是未发现摄像头）":complete?"未发现响应设备；网络隔离或设备休眠仍可能造成漏检。":"正在等待设备响应…",14,MUTED,false));
-        for(Device d:list){
-            LinearLayout card=new LinearLayout(this);card.setOrientation(1);card.setPadding(dp(12),dp(10),dp(12),dp(10));card.setBackground(shape(PANEL,12));
-            LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);p.setMargins(0,0,0,dp(7));results.addView(card,p);
-            card.addView(text(d.ip+"   "+d.type(),16,d.onvif?GREEN:d.score()>0?AMBER:FG,true));
-            card.addView(text("规则分 "+d.score()+"/100 · 端口 "+d.ports,12,MUTED,false));
-            int shown=0;for(String e:d.evidence){if(!d.onvif&&!d.rtsp&&!d.mdns&&shown>=4)break;card.addView(text("• "+e,12,FG,false));shown++;}
-            if(shown<d.evidence.size())card.addView(text("其他 "+(d.evidence.size()-shown)+" 条端口记录可在导出 JSON 中查看",12,MUTED,false));
+    }
+    private void renderDeviceCard(Device d,boolean verified){
+        LinearLayout card=new LinearLayout(this);card.setOrientation(1);
+        card.setPadding(dp(12),dp(12),dp(12),dp(12));card.setBackground(shape(PANEL,12));
+        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);
+        p.setMargins(0,0,0,dp(8));results.addView(card,p);
+        card.addView(text(d.ip+" · "+d.type(),16,verified?GREEN:AMBER,true));
+        card.addView(text(verified?"已验证视频协议，但未确认是独立摄像头":"仅服务广播，不等于协议已成功建立",12,MUTED,false));
+        ArrayList<String> important=new ArrayList<>();
+        for(String e:d.evidence){
+            if((d.onvif&&e.contains("ONVIF"))||(d.rtsp&&e.contains("RTSP 协议已确认"))||
+               (d.mdns&&e.contains("mDNS"))||e.contains("公开服务特征"))important.add(e);
         }
+        if(important.isEmpty())important.addAll(d.evidence);
+        for(String e:important)card.addView(text("• "+e,12,FG,false));
+        card.addView(text("全部端口信息可在导出 JSON 中查看",12,MUTED,false));
+    }
+    private void renderOtherCard(Device d){
+        LinearLayout card=new LinearLayout(this);card.setOrientation(1);
+        card.setPadding(dp(12),dp(10),dp(12),dp(10));card.setBackground(shape(PANEL,12));
+        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);
+        p.setMargins(0,0,0,dp(6));results.addView(card,p);
+        card.addView(text(d.ip+" · 其他网络服务",14,FG,true));
+        card.addView(text("响应端口："+d.ports+"（不构成摄像头证据）",12,MUTED,false));
     }
     private void finish(Session s){
         if(current!=s)return;
-        render(s,true);List<Device> list=sorted(s);Set<String> now=new HashSet<>();JSONArray records=new JSONArray();
+        s.complete=true;render(s,true);List<Device> list=sorted(s);Set<String> now=new HashSet<>();JSONArray records=new JSONArray();
         try{
-            for(Device d:list){if(d.score()>0)now.add(d.ip);JSONObject j=new JSONObject();j.put("ip",d.ip);j.put("type",d.type());j.put("ruleScore",d.score());j.put("evidence",new JSONArray(d.evidence));j.put("ports",new JSONArray(d.ports));records.put(j);}
-            JSONObject report=new JSONObject();report.put("scope",s.sc.label());report.put("wifiIp",address(s.sc.ip));report.put("wifiActualPrefix",s.sc.actualPrefix);report.put("wifiGateway",s.sc.gateway==0?"":address(s.sc.gateway));report.put("vpnDetected",s.sc.hasVpn);report.put("timestamp",System.currentTimeMillis());report.put("cancelled",s.cancelled.get());report.put("testedHosts",s.done.get());report.put("totalHosts",s.total);report.put("tcpAttempts",s.attempts.get());report.put("tcpOpen",s.open.get());report.put("tcpTimeouts",s.timeouts.get());report.put("tcpRefused",s.refused.get());report.put("tcpOther",s.other.get());report.put("transport",s.activeTransport);report.put("networkBlocked",s.networkBlocked.get());report.put("scanTrustworthy",!s.networkBlocked.get()&&!s.cancelled.get());report.put("errorDetails",s.errorSummary());report.put("devices",records);report.put("notes",new JSONArray(s.notes));lastJson=report.toString(2);
+            for(Device d:list){if(d.confirmedVideoProtocol())now.add(d.ip);JSONObject j=new JSONObject();j.put("ip",d.ip);j.put("type",d.type());j.put("category",d.category());j.put("videoProtocolVerified",d.confirmedVideoProtocol());j.put("physicalCameraConfirmed",false);j.put("onvif",d.onvif);j.put("rtsp",d.rtsp);j.put("mdns",d.mdns);j.put("evidence",new JSONArray(d.evidence));j.put("ports",new JSONArray(d.ports));records.put(j);}
+            JSONObject report=new JSONObject();report.put("scope",s.sc.label());report.put("wifiIp",address(s.sc.ip));report.put("wifiActualPrefix",s.sc.actualPrefix);report.put("wifiGateway",s.sc.gateway==0?"":address(s.sc.gateway));report.put("vpnDetected",s.sc.hasVpn);report.put("timestamp",System.currentTimeMillis());report.put("cancelled",s.cancelled.get());report.put("testedHosts",s.done.get());report.put("totalHosts",s.total);report.put("tcpAttempts",s.attempts.get());report.put("tcpOpen",s.open.get());report.put("tcpTimeouts",s.timeouts.get());report.put("tcpRefused",s.refused.get());report.put("tcpOther",s.other.get());report.put("transport",s.activeTransport);report.put("networkBlocked",s.networkBlocked.get());report.put("scanTrustworthy",!s.networkBlocked.get()&&!s.cancelled.get());report.put("errorDetails",s.errorSummary());report.put("identificationPolicy","Only RTSP protocol responses or ONVIF NetworkVideoTransmitter discovery are verified video endpoints; neither proves a physical camera. HTTP/TCP openings and vendor names are not camera evidence. mDNS is advertisement only.");report.put("devices",records);report.put("notes",new JSONArray(s.notes));lastJson=report.toString(2);
             getPreferences(MODE_PRIVATE).edit().putString("last_scan",lastJson).apply();
         }catch(Exception ignored){}
         Set<String> added=new HashSet<>(now);added.removeAll(previous);boolean hadPrevious=!previous.isEmpty();if(!s.cancelled.get())previous=now;
-        String msg=s.cancelled.get()?"已停止 · 部分结果":"扫描完成 · 评分非统计概率";
+        String msg=s.cancelled.get()?"已停止 · 部分结果":"扫描完成 · 仅根据视频协议识别";
         if(!s.notes.isEmpty())msg+=" · "+s.notes.size()+" 项发现限制";
         if(s.networkBlocked.get()){watching=false;msg="受系统网络限制：已停止扫描，未识别到真实摄像头";}
-        if(watching&&!s.cancelled.get()){msg+=" · 45 秒后再次扫描";if(hadPrevious&&!added.isEmpty()){msg+=" · 新候选 "+added.size();Toast.makeText(this,"新出现的候选设备："+added.size(),Toast.LENGTH_LONG).show();}}
+        if(watching&&!s.cancelled.get()){msg+=" · 45 秒后再次扫描";if(hadPrevious&&!added.isEmpty()){msg+=" · 新视频端点 "+added.size();Toast.makeText(this,"新发现的网络视频端点："+added.size(),Toast.LENGTH_LONG).show();}}
         status.setText(msg);share.setEnabled(true);current=null;scan.setEnabled(!watching);deep.setEnabled(!watching);monitor.setEnabled(true);stop.setEnabled(watching);
         if(watching&&!s.cancelled.get()&&!s.networkBlocked.get())ui.postDelayed(next,45000);else{watching=false;monitor.setText("持续监测");}
     }
