@@ -15,3 +15,6 @@ Addresses universal socket failures: records actual exception type/message and t
 
 ## v1.0.4
 **Security and accuracy correction**: removed the unbound/default-network fallback that fed every local IP through VPN traffic interception and produced nonsensical port-open results. Explicit Wi-Fi connection preflight fails closed upon EPERM; shows a clear VPN/per-app exclusion remedy; no invented camera candidates. Only ONVIF video devices, RTSP protocol responses and mDNS video-service discoveries count as confirmed. Open TCP ports alone are not camera detections. Requires physical Wi-Fi connectivity, and may require excluding this app from a VPN or disabling 'Block connections without VPN'. Not tested on a real device.
+
+## v1.0.5
+Evidence-first classification: the main results show only ONVIF NetworkVideoTransmitter discovery or verified RTSP response; mDNS service advertisements are labeled unverified; HTTP/TCP services are hidden behind an explicit toggle and never counted as cameras. Removes heuristic confidence scores and adds JSON category flags. A verified video endpoint may still be an encoder or recorder, not necessarily a physical camera.
