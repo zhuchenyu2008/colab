@@ -89,3 +89,13 @@ Source algorithm inspiration: InsightFace SCRFD and ArcFace inference, original 
 - Reference photo can be chosen from live mode or inherited from the file search page. Inference runs on background single-thread executor; frame conversion/closing run on separate CameraX analyzer executor. GPU model stays loaded for the session, and is closed on stop. The UI does not assert an identity match; candidates require human review.
 - Preserves offline file search. v0.6.0 certificate and application ID remain unchanged, release versionCode increments to 7. Same pinned signing key is required for update-over-install.
 - Device-level camera and ONNX/NCNN resource compatibility and thermal behavior need a physical OnePlus 12 test. The offline 6 FPS benchmark does not guarantee 6 FPS in a crowded live scene.
+
+## v0.8.0 → v0.8.1: model reuse without another 167MB in every APK
+
+- Install the **v0.8.0 model migration build** over v0.7.0, keeping the original pinned signing certificate. Open v0.8.0 and wait until its home status says “GPU 权重已持久保存”. This copies the exact converted ncnn FP32 R50 .param/.bin from APK assets into persistent app-private `filesDir/models/ncnn`.
+- Then install the **v0.8.1 lean build** over v0.8.0. Same signature, package name, versionCode increments 8 → 9. The large ArcFace weights are no longer in the APK and are instead opened from `filesDir/models/ncnn`.
+- The original ONNX buffalo_l model files and saved candidate screenshots remain in app-private storage and survive upgrade.
+- Without the first migration, the lean installer cannot reuse an ncnn converted model that previously only lived inside the old APK. It then falls back to ONNX Runtime CPU; warn rather than silently claiming GPU performance.
+- ncnn detection SCRFD-10G remains bundled because the much smaller model is required to start the GPU detector.
+- Do not uninstall; uninstalling deletes the persistent model and candidate gallery. If migration does not finish due to storage space, keep v0.8.0 until it succeeds.
+- If the ncnn backend is updated to a model with different blob names, regenerate `arcface_io.h` using `tools/arcface_model_io.py` and a fresh conversion and repeat model migration.

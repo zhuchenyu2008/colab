@@ -45,28 +45,11 @@ jobs:
             curl -fL --retry 3 --connect-timeout 20 -o "$ASSET_DIR/$f" "https://raw.githubusercontent.com/nihui/ncnn-android-scrfd/master/app/src/main/assets/$f"
           done
           test -f "$ASSET_DIR/scrfd_10g_kps-opt2.bin"
-      - name: Convert original ArcFace R50 to ncnn FP32
+      - name: Reuse existing Vulkan model from on-device private storage
         run: |
-          set -euo pipefail
-          WORK=/tmp/vfs-arcface
-          mkdir -p "$WORK"
-          curl -fL --retry 3 --connect-timeout 30 -o "$WORK/buffalo_l.zip" "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip"
-          ENTRY=$(unzip -Z1 "$WORK/buffalo_l.zip" | grep -E '(^|/)w600k_r50\.onnx$' | head -n 1)
-          test -n "$ENTRY"
-          unzip -p "$WORK/buffalo_l.zip" "$ENTRY" > "$WORK/w600k_r50.onnx"
-          test "$(stat -c%s "$WORK/w600k_r50.onnx")" -gt 100000000
-          python3 -m venv "$WORK/venv"
-          "$WORK/venv/bin/pip" install --disable-pip-version-check pnnx
-          cd "$WORK"
-          "$WORK/venv/bin/pnnx" w600k_r50.onnx 'inputshape=[1,3,112,112]' fp16=0 ncnnparam=w600k_r50.ncnn.param ncnnbin=w600k_r50.ncnn.bin
-          test -s w600k_r50.ncnn.param
-          test "$(stat -c%s w600k_r50.ncnn.bin)" -gt 100000000
-          python3 "$GITHUB_WORKSPACE/VideoFaceSearchAndroid/tools/arcface_model_io.py" \
-            "$WORK/w600k_r50.ncnn.param" \
-            "$GITHUB_WORKSPACE/VideoFaceSearchAndroid/app/src/main/cpp/arcface_io.h"
-          cp "$WORK/w600k_r50.ncnn.param" "$GITHUB_WORKSPACE/VideoFaceSearchAndroid/app/src/main/assets/"
-          cp "$WORK/w600k_r50.ncnn.bin" "$GITHUB_WORKSPACE/VideoFaceSearchAndroid/app/src/main/assets/"
-          ls -lh "$GITHUB_WORKSPACE/VideoFaceSearchAndroid/app/src/main/assets/w600k_r50.ncnn."*
+          echo "Lean upgrade: do not bundle large ArcFace R50 assets."
+          echo "The signed v0.8.0 bridge installer migrates the model to filesDir/models/ncnn."
+          test -f VideoFaceSearchAndroid/app/src/main/cpp/arcface_io.h
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
