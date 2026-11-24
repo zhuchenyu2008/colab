@@ -164,6 +164,25 @@ public class MainActivity extends Activity {
         final ConcurrentHashMap<String,Device> devices=new ConcurrentHashMap<>();
         final AtomicInteger done=new AtomicInteger();
         final AtomicInteger attempts=new AtomicInteger(),open=new AtomicInteger(),timeouts=new AtomicInteger(),refused=new AtomicInteger(),other=new AtomicInteger();
+        final ConcurrentHashMap<String,AtomicInteger> errors=new ConcurrentHashMap<>();
+        final AtomicBoolean plainRoute=new AtomicBoolean(false);
+        final AtomicInteger plainFallbackAttempts=new AtomicInteger(),plainFallbackConnected=new AtomicInteger();
+        volatile String activeTransport="Wi-Fi 绑定";
+        void logError(String label,Throwable ex){
+            String reason=ex.getClass().getSimpleName();
+            if(ex.getMessage()!=null)reason+=": "+ex.getMessage();
+            Throwable cause=ex.getCause();
+            if(cause!=null)reason+=" / "+cause.toString();
+            if(reason.length()>210)reason=reason.substring(0,210);
+            String key=label+" → "+reason.replace("\n"," ");
+            if(errors.size()<14||errors.containsKey(key))errors.computeIfAbsent(key,k->new AtomicInteger()).incrementAndGet();
+        }
+        String errorSummary(){
+            ArrayList<String> detail=new ArrayList<>();
+            errors.forEach((k,v)->detail.add(v.get()+"× "+k));
+            detail.sort(Comparator.naturalOrder());
+            return detail.isEmpty()?"无":android.text.TextUtils.join("\n",detail);
+        }
         int total;final List<String> notes=Collections.synchronizedList(new ArrayList<>());
         Session(Scope s,boolean d){sc=s;deep=d;}
         Device get(String ip){return devices.computeIfAbsent(ip,Device::new);}
@@ -187,46 +206,81 @@ public class MainActivity extends Activity {
         }catch(Exception e){s.notes.add("扫描中断："+e.getClass().getSimpleName());}
         finally{if(lock!=null&&lock.isHeld())lock.release();s.pool.shutdownNow();ui.post(()->finish(s));}
     }
+    private Socket connectOnRoute(Session s,String ip,int port,int timeout) throws IOException {
+        // Physical Wi-Fi route is preferred to bypass a VPN tunnel. If the OS refuses
+        // to bind its socket, test the ordinary route and switch when it is usable.
+        boolean plain=s.plainRoute.get();
+        try{
+            Socket socket=plain?new Socket():s.sc.net.getSocketFactory().createSocket();
+            try{
+                socket.connect(new InetSocketAddress(ip,port),timeout);
+                return socket;
+            }catch(IOException|RuntimeException e){
+                try{socket.close();}catch(IOException ignored){}
+                throw e;
+            }
+        }catch(IOException e){
+            s.logError(plain?"默认路由":"Wi-Fi 绑定",e);
+            if(!plain && !(e instanceof SocketTimeoutException) && !(e instanceof ConnectException)
+                    && s.plainFallbackAttempts.getAndIncrement()<12){
+                Socket fallback=new Socket();
+                try{
+                    fallback.connect(new InetSocketAddress(ip,port),timeout);
+                    s.plainRoute.set(true);
+                    s.activeTransport="默认网络路由（已自动切换）";
+                    s.plainFallbackConnected.incrementAndGet();
+                    return fallback;
+                }catch(IOException alt){
+                    try{fallback.close();}catch(IOException ignored){}
+                    s.logError("默认路由对照",alt);
+                    // Refused/timeout proves the default-route connect was executed,
+                    // while the Wi-Fi-bound socket produced a routing error.
+                    if(alt instanceof SocketTimeoutException||alt instanceof ConnectException){
+                        s.plainRoute.set(true);
+                        s.activeTransport="默认网络路由（自动切换）";
+                    }
+                }
+            }
+            throw e;
+        }
+    }
     private void probe(Session s,String ip){
-        // A connectable video port remains visible even if the camera does not answer OPTIONS.
         int[] ports=s.deep
             ?new int[]{554,8554,10554,8555,5544,7447,7448,8556,7070,10555,7554,80,81,443,8080,8081,8090,8000,5000,8888,8899,9000,37777,34567}
             :new int[]{554,8554,10554,8555,5544,80,443,8080,8000};
         for(int port:ports){
             if(s.cancelled.get()||Thread.currentThread().isInterrupted())return;
             s.attempts.incrementAndGet();
-            try(Socket sock=s.sc.net.getSocketFactory().createSocket()){
-                sock.connect(new InetSocketAddress(ip,port),s.deep?850:600);
+            try(Socket sock=connectOnRoute(s,ip,port,s.deep?850:600)){
                 s.open.incrementAndGet();
                 sock.setSoTimeout(s.deep?1400:1000);
                 Device d=s.get(ip);d.ports.add(port);
                 if(isVideoPort(port)){
-                    // Preserve the TCP evidence first; RTSP auth or nonstandard OPTIONS cannot hide it.
                     d.evidence.add("TCP "+port+" 可连接；可能是 RTSP，等待协议确认");
                     try{
                         String reply=exchange(sock,"OPTIONS rtsp://"+ip+":"+port+"/ RTSP/1.0\r\nCSeq: 1\r\nUser-Agent: CameraScanner/1.0\r\n\r\n");
                         if(isRtsp(reply)){
                             d.rtsp=true;d.evidence.add("RTSP 协议已确认："+firstLine(reply));
                         }else{
-                            // Some older cameras only support the asterisk form of OPTIONS.
                             String second=tryAlternativeRtsp(s,ip,port);
                             if(isRtsp(second)){d.rtsp=true;d.evidence.add("RTSP 协议已确认："+firstLine(second));}
                             else if(!reply.isEmpty())d.evidence.add("非标准协议响应："+firstLine(reply));
                         }
                     }catch(IOException|RuntimeException e){
-                        d.evidence.add("视频端口已开放，但 RTSP 握手失败："+e.getClass().getSimpleName());
+                        d.evidence.add("视频端口开放，但 RTSP 握手失败："+e.getClass().getSimpleName());
+                        s.logError("RTSP握手",e);
                     }
                 }else if(port==80||port==81||port==8080||port==8081||port==8090||port==8000||port==8899||port==8888){
                     d.evidence.add("HTTP 常用端口 "+port+" 可连接");
                     try{
                         String reply=exchange(sock,"HEAD / HTTP/1.1\r\nHost: "+ip+"\r\nConnection: close\r\nUser-Agent: CameraScanner/1.0\r\n\r\n");
                         if(reply.startsWith("HTTP/")){d.evidence.add("HTTP "+port+"："+firstLine(reply));markVendor(d,reply);}
-                    }catch(IOException ignored){}
+                    }catch(IOException e){s.logError("HTTP握手",e);}
                 }else d.evidence.add("TCP "+port+" 可连接（仅端口证据）");
             }catch(SocketTimeoutException e){s.timeouts.incrementAndGet();}
             catch(ConnectException e){s.refused.incrementAndGet();}
-            catch(SecurityException e){s.notes.add("本地网络连接受到系统权限限制");return;}
-            catch(IOException|RuntimeException e){s.other.incrementAndGet();}
+            catch(SecurityException e){s.logError("安全策略",e);s.other.incrementAndGet();return;}
+            catch(IOException|RuntimeException e){s.other.incrementAndGet();s.logError("TCP "+port,e);}
         }
     }
     private static boolean isVideoPort(int p){
@@ -238,8 +292,7 @@ public class MainActivity extends Activity {
     }
     private String tryAlternativeRtsp(Session s,String ip,int port){
         if(s.cancelled.get())return "";
-        try(Socket sock=s.sc.net.getSocketFactory().createSocket()){
-            sock.connect(new InetSocketAddress(ip,port),1100);
+        try(Socket sock=connectOnRoute(s,ip,port,1100)){
             sock.setSoTimeout(1200);
             return exchange(sock,"OPTIONS * RTSP/1.0\r\nCSeq: 2\r\nUser-Agent: CameraScanner/1.0\r\n\r\n");
         }catch(Exception e){return "";}
@@ -259,7 +312,9 @@ public class MainActivity extends Activity {
     }
     private void udpDiscovery(Session s,boolean onvif){
         try(DatagramSocket sock=new DatagramSocket(null)){
-            s.sc.net.bindSocket(sock);sock.bind(new InetSocketAddress(0));sock.setSoTimeout(350);
+            try{s.sc.net.bindSocket(sock);}
+            catch(Exception e){s.logError("UDP Wi-Fi 绑定",e);s.notes.add("UDP Wi-Fi 绑定失败，尝试系统默认路由");}
+            sock.bind(new InetSocketAddress(0));sock.setSoTimeout(350);
             String payload=onvif?"<?xml version=\"1.0\" encoding=\"UTF-8\"?><s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\" xmlns:a=\"http://schemas.xmlsoap.org/ws/2004/08/addressing\" xmlns:d=\"http://schemas.xmlsoap.org/ws/2005/04/discovery\" xmlns:dn=\"http://www.onvif.org/ver10/network/wsdl\"><s:Header><a:MessageID>urn:uuid:"+UUID.randomUUID()+"</a:MessageID><a:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</a:To><a:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</a:Action></s:Header><s:Body><d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe></s:Body></s:Envelope>":"M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: ssdp:all\r\n\r\n";
             byte[] b=payload.getBytes(StandardCharsets.UTF_8);
             DatagramPacket out=new DatagramPacket(b,b.length,InetAddress.getByName("239.255.255.250"),onvif?3702:1900);
@@ -281,7 +336,7 @@ public class MainActivity extends Activity {
                     markVendor(d,reply);
                 }
             }
-        }catch(Exception e){s.notes.add((onvif?"ONVIF":"SSDP")+" 发现不可用："+e.getClass().getSimpleName());}
+        }catch(Exception e){s.logError(onvif?"ONVIF":"SSDP",e);s.notes.add((onvif?"ONVIF":"SSDP")+" 发现不可用："+e.getClass().getSimpleName()+" / "+e.getMessage());}
     }
     private void mdnsDiscovery(Session s){
         NsdManager nsd=(NsdManager)getSystemService(NSD_SERVICE);if(nsd==null)return;
@@ -324,7 +379,7 @@ public class MainActivity extends Activity {
         counts.setText(list.size()+" 个已发现 · "+candidates+" 个候选");
         progress.setProgress(complete&&!s.cancelled.get()?100:Math.min(99,100*s.done.get()/Math.max(1,s.total)));
         if(!complete)status.setText("扫描 "+s.done.get()+" / "+s.total+" 个 IP · TCP已连接 "+s.open.get()+" 次");
-        if(complete)status.setText("扫描结束 · TCP 已连接 "+s.open.get()+" 次 · 超时 "+s.timeouts.get()+" 次");
+        if(complete)status.setText("扫描结束 · TCP 已连接 "+s.open.get()+" 次 · 错误 "+s.other.get()+" 次 · "+s.activeTransport);
         results.removeAllViews();
         if(complete){
             String finding;
@@ -333,7 +388,7 @@ public class MainActivity extends Activity {
             else if(list.stream().noneMatch(d->d.onvif||d.rtsp||d.mdns))finding="已完成探测，但没有收到可确认的摄像头协议。可再使用深度扫描扩展端口和 IP 范围；开放端口不等于摄像头。";
             else finding="已发现协议证据；请根据每台设备列出的具体证据判断。";
             String testedPorts=s.deep?"554,8554,10554,8555,5544,7447,7448,8556,7070,10555,7554,80,81,443,8080,8081,8090,8000,5000,8888,8899,9000,37777,34567":"554,8554,10554,8555,5544,80,443,8080,8000";
-            TextView diag=text("网络："+s.sc.networkSummary()+"\n检测 IP："+s.done.get()+"/"+s.total+" · TCP 尝试："+s.attempts.get()+" · 成功："+s.open.get()+"\n连接超时："+s.timeouts.get()+" · 拒绝："+s.refused.get()+" · 其他错误："+s.other.get()+"\n扫描端口："+testedPorts+"\n结果分析："+finding+"\n发现协议问题："+s.notes,12,MUTED,false);
+            TextView diag=text("网络："+s.sc.networkSummary()+"\n检测 IP："+s.done.get()+"/"+s.total+" · TCP 尝试："+s.attempts.get()+" · 成功："+s.open.get()+"\n连接超时："+s.timeouts.get()+" · 拒绝："+s.refused.get()+" · 其他错误："+s.other.get()+"\n扫描端口："+testedPorts+"\n结果分析："+finding+"\n连接方式："+s.activeTransport+" · 默认路由成功 "+s.plainFallbackConnected.get()+" 次\n真实异常类型（最多 14 类）：\n"+s.errorSummary()+"\n发现协议问题："+s.notes,12,MUTED,false);
             diag.setPadding(dp(8),dp(8),dp(8),dp(12));results.addView(diag);
         }
         if(list.isEmpty())results.addView(text(complete?"未发现响应设备；网络隔离或设备休眠可能造成漏检。":"正在等待设备响应…",14,MUTED,false));
@@ -350,7 +405,7 @@ public class MainActivity extends Activity {
         render(s,true);List<Device> list=sorted(s);Set<String> now=new HashSet<>();JSONArray records=new JSONArray();
         try{
             for(Device d:list){if(d.score()>0)now.add(d.ip);JSONObject j=new JSONObject();j.put("ip",d.ip);j.put("type",d.type());j.put("ruleScore",d.score());j.put("evidence",new JSONArray(d.evidence));j.put("ports",new JSONArray(d.ports));records.put(j);}
-            JSONObject report=new JSONObject();report.put("scope",s.sc.label());report.put("wifiIp",address(s.sc.ip));report.put("wifiActualPrefix",s.sc.actualPrefix);report.put("wifiGateway",s.sc.gateway==0?"":address(s.sc.gateway));report.put("vpnDetected",s.sc.hasVpn);report.put("timestamp",System.currentTimeMillis());report.put("cancelled",s.cancelled.get());report.put("testedHosts",s.done.get());report.put("totalHosts",s.total);report.put("tcpAttempts",s.attempts.get());report.put("tcpOpen",s.open.get());report.put("tcpTimeouts",s.timeouts.get());report.put("tcpRefused",s.refused.get());report.put("tcpOther",s.other.get());report.put("devices",records);report.put("notes",new JSONArray(s.notes));lastJson=report.toString(2);
+            JSONObject report=new JSONObject();report.put("scope",s.sc.label());report.put("wifiIp",address(s.sc.ip));report.put("wifiActualPrefix",s.sc.actualPrefix);report.put("wifiGateway",s.sc.gateway==0?"":address(s.sc.gateway));report.put("vpnDetected",s.sc.hasVpn);report.put("timestamp",System.currentTimeMillis());report.put("cancelled",s.cancelled.get());report.put("testedHosts",s.done.get());report.put("totalHosts",s.total);report.put("tcpAttempts",s.attempts.get());report.put("tcpOpen",s.open.get());report.put("tcpTimeouts",s.timeouts.get());report.put("tcpRefused",s.refused.get());report.put("tcpOther",s.other.get());report.put("transport",s.activeTransport);report.put("defaultRouteFallbackConnected",s.plainFallbackConnected.get());report.put("errorDetails",s.errorSummary());report.put("devices",records);report.put("notes",new JSONArray(s.notes));lastJson=report.toString(2);
             getPreferences(MODE_PRIVATE).edit().putString("last_scan",lastJson).apply();
         }catch(Exception ignored){}
         Set<String> added=new HashSet<>(now);added.removeAll(previous);boolean hadPrevious=!previous.isEmpty();if(!s.cancelled.get())previous=now;
