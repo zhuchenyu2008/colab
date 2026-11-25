@@ -97,7 +97,7 @@ class MainActivity : Activity() {
 
         val scroll = ScrollView(this).apply {
             setBackgroundColor(canvas)
-            fillViewport = true
+            isFillViewport = true
             isVerticalScrollBarEnabled = false
         }
         val content = LinearLayout(this).apply {
