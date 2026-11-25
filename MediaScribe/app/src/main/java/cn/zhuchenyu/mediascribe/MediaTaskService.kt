@@ -12,6 +12,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import android.provider.MediaStore
+import android.util.Log
 import com.arthenica.ffmpegkit.FFmpegKit
 import com.arthenica.ffmpegkit.FFmpegKitConfig
 import com.arthenica.ffmpegkit.ReturnCode
@@ -71,7 +72,7 @@ class MediaTaskService : Service() {
         val action = intent?.action ?: return START_NOT_STICKY
         if (action == OP_CANCEL) {
             job?.cancel()
-            FFmpegKit.cancel()
+            try { FFmpegKit.cancel() } catch (t: Throwable) { Log.w("MediaScribe", "Cancel failed", t) }
             publish("取消请求已发送，正在结束当前片段", -1)
             return START_NOT_STICKY
         }
@@ -80,11 +81,24 @@ class MediaTaskService : Service() {
             return START_NOT_STICKY
         }
         lastPercent = -2
-        if (Build.VERSION.SDK_INT >= 35) {
-            startForeground(NOTIFY_ID, notification("准备处理文件"), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING)
-        } else {
-            startForeground(NOTIFY_ID, notification("准备处理文件"))
+        try {
+            if (Build.VERSION.SDK_INT >= 35) {
+                startForeground(NOTIFY_ID, notification("准备处理文件"), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING)
+            } else {
+                startForeground(NOTIFY_ID, notification("准备处理文件"))
+            }
+        } catch (t: Throwable) {
+            Log.e("MediaScribe", "Unable to start media worker", t)
+            val message = "处理服务启动失败：" + (t.message ?: t.javaClass.simpleName)
+            getSharedPreferences("task_state", MODE_PRIVATE).edit()
+                .putString("last_message", message).putString("last_action", action).commit()
+            sendBroadcast(Intent(ACTION_UPDATE).setPackage(packageName)
+                .putExtra(EXTRA_MESSAGE, message).putExtra(EXTRA_PROGRESS, 0).putExtra(EXTRA_DONE, true))
+            stopSelfResult(startId)
+            return START_NOT_STICKY
         }
+        getSharedPreferences("task_state", MODE_PRIVATE).edit()
+            .putString("last_action", action).commit()
         val uriString = intent.getStringExtra(EXTRA_URI)
         val model = intent.getStringExtra(EXTRA_MODEL) ?: ModelCatalog.BASE
         job = worker.launch {
@@ -97,11 +111,15 @@ class MediaTaskService : Service() {
                 }
             } catch (_: CancellationException) {
                 publish("任务已取消", 0, done = true)
-            } catch (e: Exception) {
-                publish("处理失败：${e.message ?: e.javaClass.simpleName}", 0, done = true)
+            } catch (t: Throwable) {
+                Log.e("MediaScribe", "Task failed", t)
+                publish("处理失败：" + t.javaClass.simpleName + " · " +
+                    (t.message ?: "底层处理错误").take(200), 0, done = true)
             } finally {
-                if (Build.VERSION.SDK_INT >= 24) stopForeground(STOP_FOREGROUND_REMOVE)
-                else @Suppress("DEPRECATION") stopForeground(true)
+                try {
+                    if (Build.VERSION.SDK_INT >= 24) stopForeground(STOP_FOREGROUND_REMOVE)
+                    else @Suppress("DEPRECATION") stopForeground(true)
+                } catch (t: Throwable) { Log.w("MediaScribe", "stopForeground failed", t) }
                 stopSelfResult(startId)
             }
         }
@@ -126,7 +144,7 @@ class MediaTaskService : Service() {
             val arguments = arrayOf(
                 "-hide_banner", "-nostdin", "-y", "-i", input,
                 "-map", "0:a:0", "-vn", "-c:a", "libmp3lame",
-                "-b:a", "192k", "-ar", "44100", "-ac", "2",
+                "-b:a", "192k",
                 temp.absolutePath
             )
             runFFmpeg(arguments)
@@ -159,7 +177,8 @@ class MediaTaskService : Service() {
             }
             runFFmpeg(arrayOf(
                 "-hide_banner", "-nostdin", "-y", "-i", input,
-                "-map", "0:a:0", "-vn", "-ar", "16000", "-ac", "1",
+                "-map", "0:a:0", "-vn",
+                "-af", "aformat=sample_rates=16000:channel_layouts=mono",
                 "-c:a", "pcm_s16le", "-f", "segment", "-segment_time", "60",
                 "-segment_format", "wav", "-reset_timestamps", "1",
                 File(dir, "chunk_%04d.wav").absolutePath
@@ -319,6 +338,9 @@ class MediaTaskService : Service() {
     private fun publish(message: String, percent: Int, done: Boolean = false,
                         outputUri: String? = null, outputType: String? = null) {
         lastPercent = percent
+        getSharedPreferences("task_state", MODE_PRIVATE).edit()
+            .putString("last_message", message)
+            .commit()
         val update = Intent(ACTION_UPDATE).setPackage(packageName)
             .putExtra(EXTRA_MESSAGE, message)
             .putExtra(EXTRA_PROGRESS, percent)
@@ -326,7 +348,11 @@ class MediaTaskService : Service() {
             .putExtra(EXTRA_OUTPUT_URI, outputUri)
             .putExtra(EXTRA_OUTPUT_TYPE, outputType)
         sendBroadcast(update)
-        getSystemService(NotificationManager::class.java).notify(NOTIFY_ID, notification(message))
+        try {
+            getSystemService(NotificationManager::class.java).notify(NOTIFY_ID, notification(message))
+        } catch (t: Throwable) {
+            Log.w("MediaScribe", "Notification failed", t)
+        }
     }
 
     private fun notification(content: String): Notification =
