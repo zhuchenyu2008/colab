@@ -89,7 +89,7 @@ public final class MainActivity extends Activity {
         top.setGravity(Gravity.CENTER_VERTICAL);
         TextView brand = overline("FACE / SEARCH  ·  LOCAL AI");
         top.addView(brand, new LinearLayout.LayoutParams(0, -2, 1));
-        TextView version = label("V" + BuildConfig.VERSION_NAME, 11, true);
+        TextView version = label("V0.9.0", 11, true);
         version.setTextColor(MUTED);
         version.setGravity(Gravity.CENTER);
         version.setBackground(panel(0xFF172637, 30));

@@ -61,7 +61,7 @@ public final class LiveCameraActivity extends ComponentActivity {
     private final int COLOR_BG=0xFF0C1426, COLOR_PANEL=0xFF18243A, COLOR_TEXT=0xFFF3F7FC, COLOR_MUTED=0xFF94A7BF, COLOR_ACCENT=0xFF22D6AD;
     private TextView status,metrics,matchStatus,refLabel;
     private ProcessCameraProvider cameraProvider;
-    private Camera activeCamera;
+    private androidx.camera.core.Camera activeCamera;
     private FaceEngine engine;
     private float[] referenceEmbedding;
     private Uri referenceUri;
