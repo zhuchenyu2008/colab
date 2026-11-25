@@ -8,8 +8,8 @@ android {
         applicationId = "cn.zhuchenyu.mediascribe"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
         ndk { abiFilters += "arm64-v8a" }
     }
 
@@ -24,7 +24,7 @@ android {
 }
 
 dependencies {
-    implementation("dev.ffmpegkit-maintained:ffmpeg-kit-audio:8.1.7")
+    implementation("dev.ffmpegkit-maintained:ffmpeg-kit-audio:8.1.9")
     implementation("dev.ffmpegkit-maintained:whisper-android:1.0.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 }
