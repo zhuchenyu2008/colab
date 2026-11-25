@@ -60,13 +60,14 @@ jobs:
             --ks-key-alias androiddebugkey \
             --ks-pass pass:android \
             --key-pass pass:android \
-            --out MediaScribe-v1.0.0-arm64.apk \
+            --out MediaScribe-v1.1.0-arm64.apk \
             MediaScribe/app/build/outputs/apk/debug/app-debug.apk
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs MediaScribe-v1.0.0-arm64.apk
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs MediaScribe-v1.1.0-arm64.apk | tee signing-verify.txt
+          grep -Fq "3399e3c09011fc06fb5b4ade78deebbc0f611ff1ceea3af7c79c0fc404dffcff" signing-verify.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: MediaScribe-v1.0.0-arm64
-          path: MediaScribe-v1.0.0-arm64.apk
+          name: MediaScribe-v1.1.0-arm64
+          path: MediaScribe-v1.1.0-arm64.apk
           if-no-files-found: error
           retention-days: 30
