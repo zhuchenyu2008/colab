@@ -99,7 +99,7 @@ class MainActivity : Activity() {
             setPadding(0, 0, 0, dp(22))
         })
 
-        card(root, "01  视频 → MP3", "选择本地视频，提取真正的 MP3（16 kHz / 128 kbps 单声道）。") { group ->
+        card(root, "01  视频 → MP3", "选择本地视频，提取真正的 MP3（44.1 kHz / 192 kbps 双声道）。") { group ->
             videoName = label(selectedVideo?.let { "已选择视频" } ?: "尚未选择视频", 14f, "#BAC5DC", false)
             group.addView(videoName)
             group.addView(button("选择视频文件") { openPicker("video") })
