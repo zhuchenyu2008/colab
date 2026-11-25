@@ -52,7 +52,7 @@ public final class LiveCameraActivity extends ComponentActivity {
     private volatile long startedAtMs;
     private long fpsWindowStartNs, fpsWindowFrames;
 
-    private Button startButton,stopButton,chooseButton;
+    private Button startButton,stopButton,chooseButton,flipButton,torchButton;
     private PreviewView previewView;
     private FaceOverlayView overlayView;
     private CandidateStore candidateStore;
@@ -61,10 +61,13 @@ public final class LiveCameraActivity extends ComponentActivity {
     private final int COLOR_BG=0xFF0C1426, COLOR_PANEL=0xFF18243A, COLOR_TEXT=0xFFF3F7FC, COLOR_MUTED=0xFF94A7BF, COLOR_ACCENT=0xFF22D6AD;
     private TextView status,metrics,matchStatus,refLabel;
     private ProcessCameraProvider cameraProvider;
+    private Camera activeCamera;
     private FaceEngine engine;
     private float[] referenceEmbedding;
     private Uri referenceUri;
     private boolean useAccelerator=true;
+    private boolean useFrontCamera=false;
+    private boolean torchEnabled=false;
 
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -77,92 +80,84 @@ public final class LiveCameraActivity extends ComponentActivity {
         if(uri!=null)try{referenceUri=Uri.parse(uri);}catch(Exception ignored){}
 
         ScrollView scroll=new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setBackgroundColor(COLOR_BG);
         LinearLayout root=new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(14),dp(16),dp(14),dp(32));
-        GradientDrawable background=new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-            new int[]{0xFF0C1426,0xFF101B30,0xFF0E172B});
-        root.setBackground(background);scroll.setFillViewport(true);
-        scroll.setBackgroundColor(COLOR_BG);
+        root.setPadding(dp(16),dp(18),dp(16),dp(32));
+        root.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+            new int[]{0xFF080D15,0xFF0D1827,0xFF080D15}));
         scroll.addView(root);
-        TextView brand=label("FACE / SEARCH   ·   LIVE",12,true);
-        brand.setTextColor(COLOR_ACCENT);root.addView(brand);
-        root.addView(label("实时智能分析",29,true));
-        TextView subtitle=label("VULKAN GPU  ·  ADAPTIVE SCAN  ·  ON DEVICE",11,false);
+
+        LinearLayout top=new LinearLayout(this);top.setGravity(Gravity.CENTER_VERTICAL);
+        TextView brand=label("FACE / SEARCH  ·  LIVE",11,true);brand.setTextColor(COLOR_ACCENT);
+        top.addView(brand,new LinearLayout.LayoutParams(0,-2,1));
+        TextView livePill=label("LIVE",10,true);livePill.setTextColor(COLOR_ACCENT);
+        livePill.setPadding(dp(10),dp(4),dp(10),dp(4));livePill.setBackground(panelBackground(0xFF173D3C,30));
+        top.addView(livePill);root.addView(top);
+        TextView title=label("实时智能分析",29,true);title.setPadding(0,dp(12),0,dp(1));root.addView(title);
+        TextView subtitle=label("自适应采样 · 本地推理 · 摄像头不录制",12,false);
         subtitle.setTextColor(COLOR_MUTED);root.addView(subtitle);
-        root.addView(label("仅限已获授权的测试 · 候选相似度不代表身份确认",11,false));
+        TextView privacy=label("已授权测试用途 · 候选相似度不等于身份确认",11,false);
+        privacy.setTextColor(0xFFB4C2D2);privacy.setPadding(0,dp(10),0,dp(10));root.addView(privacy);
 
         previewView=new PreviewView(this);
         previewView.setImplementationMode(PreviewView.ImplementationMode.COMPATIBLE);
         previewView.setScaleType(PreviewView.ScaleType.FILL_CENTER);
         FrameLayout cameraFrame=new FrameLayout(this);
-        cameraFrame.addView(previewView,new FrameLayout.LayoutParams(-1,dp(400)));
+        cameraFrame.addView(previewView,new FrameLayout.LayoutParams(-1,dp(410)));
         overlayView=new FaceOverlayView(this);
-        cameraFrame.addView(overlayView,new FrameLayout.LayoutParams(-1,dp(400)));
-        GradientDrawable cameraBg=new GradientDrawable();
-        cameraBg.setColor(0xFF152136);cameraBg.setCornerRadius(dp(18));
-        cameraFrame.setBackground(cameraBg);
-        cameraFrame.setClipToOutline(true);
-        TextView hint=label("● LIVE  ·  CAMERA 01",12,true);
-        hint.setTextColor(COLOR_ACCENT);
-        hint.setBackgroundColor(0xB20C1726);
-        FrameLayout.LayoutParams hintParams=new FrameLayout.LayoutParams(-1,-2,Gravity.TOP);
-        cameraFrame.addView(hint,hintParams);
-        root.addView(cameraFrame);
-        TextView legend=label("青色：普通人脸   /   红色：达到匹配阈值（同时闪烁红色边框）",12,false);
-        legend.setTextColor(COLOR_MUTED);root.addView(legend);
+        cameraFrame.addView(overlayView,new FrameLayout.LayoutParams(-1,dp(410)));
+        GradientDrawable cameraBg=new GradientDrawable();cameraBg.setColor(0xFF152136);cameraBg.setCornerRadius(dp(20));
+        cameraFrame.setBackground(cameraBg);cameraFrame.setClipToOutline(true);
+        TextView hint=label("●  LIVE CAMERA  /  PREVIEW",11,true);hint.setTextColor(COLOR_ACCENT);
+        hint.setPadding(dp(12),dp(8),dp(12),dp(8));hint.setBackgroundColor(0xB20C1726);
+        cameraFrame.addView(hint,new FrameLayout.LayoutParams(-1,-2,Gravity.TOP));root.addView(cameraFrame);
+        TextView legend=label("青色框 = 普通人脸   ·   红色框 = 达到阈值   ·   红色边缘 = 需要人工核验",11,false);
+        legend.setTextColor(COLOR_MUTED);legend.setPadding(dp(4),dp(7),dp(4),dp(3));root.addView(legend);
 
-        TextView referenceTitle=label("01  /  参考人脸",16,true);
-        root.addView(referenceTitle);
-        chooseButton=button("选择参考照片",v->chooseReference());
-        root.addView(chooseButton);
-        refLabel=label(referenceUri==null?"尚未选择参考照片":"参考照片已选，启动时读取",13,false);
-        root.addView(refLabel);
+        LinearLayout referenceCard=cardContainer();referenceCard.addView(section("01  /  参考人脸"));
+        LinearLayout refRow=new LinearLayout(this);refRow.setGravity(Gravity.CENTER_VERTICAL);
+        refLabel=label(referenceUri==null?"尚未选择参考照片":"参考照片已选，启动时读取",13,true);
+        refLabel.setMaxLines(2);refRow.addView(refLabel,new LinearLayout.LayoutParams(0,-2,1));
+        chooseButton=button("选择照片",v->chooseReference());refRow.addView(chooseButton,new LinearLayout.LayoutParams(dp(94),dp(44)));
+        referenceCard.addView(refRow);root.addView(referenceCard,cardParams(12));
 
-        LinearLayout controls=new LinearLayout(this);
-        controls.setOrientation(LinearLayout.HORIZONTAL);
-        startButton=button("开始实时分析",v->start());
-        stopButton=button("停止",v->stop());
-        controls.setPadding(0,dp(8),0,dp(6));
-        LinearLayout.LayoutParams startParams=new LinearLayout.LayoutParams(0,dp(55),1f);
-        startParams.rightMargin=dp(8);
-        controls.addView(startButton,startParams);
-        controls.addView(stopButton,new LinearLayout.LayoutParams(0,dp(55),.65f));
-        styleButton(startButton,COLOR_ACCENT,COLOR_BG);
-        styleButton(stopButton,0xFF29364D,COLOR_TEXT);
-        root.addView(controls);
+        LinearLayout controls=new LinearLayout(this);controls.setPadding(0,dp(12),0,dp(4));
+        startButton=button("开始实时分析",v->start());stopButton=button("停止",v->stop());
+        LinearLayout.LayoutParams startParams=new LinearLayout.LayoutParams(0,dp(52),1f);startParams.rightMargin=dp(8);
+        controls.addView(startButton,startParams);controls.addView(stopButton,new LinearLayout.LayoutParams(0,dp(52),.62f));
+        styleButton(startButton,COLOR_ACCENT,COLOR_BG);styleButton(stopButton,0xFF29364D,COLOR_TEXT);root.addView(controls);
         stopButton.setEnabled(false);
 
-        root.addView(label("02  /  实时分析状态",16,true));
+        LinearLayout cameraTools=new LinearLayout(this);cameraTools.setGravity(Gravity.CENTER_VERTICAL);
+        flipButton=button("切换镜头",v->flipCamera());torchButton=button("补光灯",v->toggleTorch());
+        cameraTools.addView(flipButton,new LinearLayout.LayoutParams(0,dp(42),1));
+        LinearLayout.LayoutParams torchParams=new LinearLayout.LayoutParams(0,dp(42),1);torchParams.leftMargin=dp(8);
+        cameraTools.addView(torchButton,torchParams);root.addView(cameraTools);
+        flipButton.setEnabled(false);torchButton.setEnabled(false);
+
+        LinearLayout dashboard=cardContainer();dashboard.addView(section("02  /  实时分析状态"));
         status=label("准备就绪。每5帧分析一次，算力不足时智能降低频率。",13,false);
         metrics=label("PREVIEW -- FPS   ·   SCAN -- FPS   ·   /5 FRAMES",14,true);
         matchStatus=label("当前状态 · 尚未开始",15,true);
-        LinearLayout dashboard=new LinearLayout(this);
-        dashboard.setOrientation(LinearLayout.VERTICAL);
-        dashboard.setPadding(dp(12),dp(10),dp(12),dp(10));
-        dashboard.setBackground(panelBackground(COLOR_PANEL,14));
-        dashboard.addView(metrics);dashboard.addView(matchStatus);dashboard.addView(status);
-        root.addView(dashboard);
+        dashboard.addView(metrics);dashboard.addView(matchStatus);dashboard.addView(status);root.addView(dashboard,cardParams(12));
 
-        root.addView(label("03  /  候选人脸截图",16,true));
-        galleryTitle=label("截图仅保存在应用本地，最多40张；每次保留候选脸部裁剪。",12,false);
-        galleryTitle.setTextColor(COLOR_MUTED);root.addView(galleryTitle);
-        HorizontalScrollView screenshots=new HorizontalScrollView(this);
-        screenshots.setHorizontalScrollBarEnabled(false);
+        LinearLayout galleryCard=cardContainer();galleryCard.addView(section("03  /  候选人脸截图"));
+        galleryTitle=label("截图仅保存在应用本地，最多40张；每次只保存候选脸部裁剪。",12,false);
+        galleryTitle.setTextColor(COLOR_MUTED);galleryCard.addView(galleryTitle);
+        HorizontalScrollView screenshots=new HorizontalScrollView(this);screenshots.setHorizontalScrollBarEnabled(false);
         galleryStrip=new LinearLayout(this);galleryStrip.setOrientation(LinearLayout.HORIZONTAL);
-        screenshots.addView(galleryStrip);root.addView(screenshots);
+        screenshots.addView(galleryStrip);galleryCard.addView(screenshots);
         Button clear=button("清空已保存的候选截图",v->new AlertDialog.Builder(this)
             .setTitle("清空候选截图？")
             .setMessage("仅删除本应用私有目录里的候选人脸截图，不影响原视频和模型。")
             .setNegativeButton("取消",null)
-            .setPositiveButton("删除",(dialog,which)->{
-                candidateStore.clearAll();renderGallery();
-            }).show());
-        styleButton(clear,0xFF263348,COLOR_MUTED);
-        root.addView(clear);
+            .setPositiveButton("删除",(dialog,which)->{candidateStore.clearAll();renderGallery();}).show());
+        styleButton(clear,0xFF263348,COLOR_MUTED);galleryCard.addView(clear);root.addView(galleryCard,cardParams(12));
         renderGallery();
         TextView footer=label("仅前台使用 · 不上传人脸 · 不记录连续视频 · 停止即关闭摄像头",11,false);
-        footer.setTextColor(COLOR_MUTED);root.addView(footer);
+        footer.setTextColor(COLOR_MUTED);footer.setPadding(dp(4),dp(14),dp(4),0);root.addView(footer);
         setContentView(scroll);
     }
     private int dp(int n){return Math.round(n*getResources().getDisplayMetrics().density);}
@@ -183,6 +178,22 @@ public final class LiveCameraActivity extends ComponentActivity {
     private void styleButton(Button b,int color,int text){
         b.setTextColor(text);b.setBackground(panelBackground(color,12));
         b.setMinHeight(dp(48));
+    }
+    private LinearLayout cardContainer(){
+        LinearLayout card=new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(14),dp(13),dp(14),dp(13));
+        card.setBackground(panelBackground(COLOR_PANEL,16));
+        return card;
+    }
+    private LinearLayout.LayoutParams cardParams(int top){
+        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);
+        p.topMargin=dp(top);return p;
+    }
+    private TextView section(String text){
+        TextView view=label(text,16,true);
+        view.setPadding(0,0,0,dp(8));
+        return view;
     }
     private void renderGallery(){
         if(galleryStrip==null)return;
@@ -262,6 +273,7 @@ public final class LiveCameraActivity extends ComponentActivity {
         loading=true;
         startButton.setEnabled(false);
         chooseButton.setEnabled(false);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         matchStatus.setText("实时候选：初始化模型中...");
         update("加载模型与参考人脸，首次启动可能需要下载原始 buffalo_l 模型...");
         inferenceExecutor.execute(()->{
@@ -297,6 +309,8 @@ public final class LiveCameraActivity extends ComponentActivity {
                 if(run==generation.get())runOnUiThread(()->{
                     loading=false;started=false;startButton.setEnabled(true);
                     chooseButton.setEnabled(true);stopButton.setEnabled(false);
+                    flipButton.setEnabled(false);torchButton.setEnabled(false);
+                    getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
                     update("实时分析启动失败："+e.getClass().getSimpleName()+": "+e.getMessage());
                 });
             }finally{
@@ -310,23 +324,45 @@ public final class LiveCameraActivity extends ComponentActivity {
             if(!started||run!=generation.get())return;
             try{
                 cameraProvider=future.get();
-                cameraProvider.unbindAll();
-                Preview preview=new Preview.Builder().build();
-                preview.setSurfaceProvider(previewView.getSurfaceProvider());
-                ImageAnalysis analysis=new ImageAnalysis.Builder()
-                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
-                    .setTargetResolution(new Size(1280,720))
-                    .build();
-                analysis.setAnalyzer(cameraExecutor,frame->processCameraFrame(run,frame));
-                cameraProvider.bindToLifecycle(this,CameraSelector.DEFAULT_BACK_CAMERA,preview,analysis);
-                startedAtMs=SystemClock.elapsedRealtime();
-                update("摄像头运行中：默认每5帧分析一次，过载时自动降低频率");
+                bindCamera(run);
             }catch(Exception e){
                 update("摄像头启动失败："+e.getMessage());
                 stop();
             }
         },ContextCompat.getMainExecutor(this));
+    }
+    /** Rebinds the preview when the user flips the camera without rebuilding the model. */
+    private void bindCamera(int run){
+        if(cameraProvider==null||!started||run!=generation.get())return;
+        cameraProvider.unbindAll();
+        Preview preview=new Preview.Builder().build();
+        preview.setSurfaceProvider(previewView.getSurfaceProvider());
+        ImageAnalysis analysis=new ImageAnalysis.Builder()
+            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
+            .setTargetResolution(new Size(1280,720))
+            .build();
+        analysis.setAnalyzer(cameraExecutor,frame->processCameraFrame(run,frame));
+        CameraSelector selector=useFrontCamera?CameraSelector.DEFAULT_FRONT_CAMERA:CameraSelector.DEFAULT_BACK_CAMERA;
+        activeCamera=cameraProvider.bindToLifecycle(this,selector,preview,analysis);
+        torchEnabled=false;
+        boolean hasFlash=activeCamera.getCameraInfo().hasFlashUnit()&&!useFrontCamera;
+        torchButton.setEnabled(hasFlash);
+        torchButton.setText("补光灯");
+        flipButton.setEnabled(true);
+        startedAtMs=SystemClock.elapsedRealtime();
+        update((useFrontCamera?"前置":"后置")+"摄像头运行中：每5帧起步，过载时自动降低频率");
+    }
+    private void flipCamera(){
+        if(!started||cameraProvider==null)return;
+        useFrontCamera=!useFrontCamera;
+        bindCamera(generation.get());
+    }
+    private void toggleTorch(){
+        if(activeCamera==null||useFrontCamera||!activeCamera.getCameraInfo().hasFlashUnit())return;
+        torchEnabled=!torchEnabled;
+        activeCamera.getCameraControl().enableTorch(torchEnabled);
+        torchButton.setText(torchEnabled?"关闭补光灯":"补光灯");
     }
     private void processCameraFrame(int run,ImageProxy image){
         Bitmap bitmap=null;
@@ -440,9 +476,15 @@ public final class LiveCameraActivity extends ComponentActivity {
         if(cameraProvider!=null){
             try{cameraProvider.unbindAll();}catch(Exception ignored){}
         }
+        activeCamera=null;
+        torchEnabled=false;
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         stopButton.setEnabled(false);
         startButton.setEnabled(true);
         chooseButton.setEnabled(true);
+        flipButton.setEnabled(false);
+        torchButton.setEnabled(false);
+        torchButton.setText("补光灯");
         overlayView.clear();
         update("已停止实时分析，摄像头已关闭。");
         inferenceExecutor.execute(()->{

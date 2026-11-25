@@ -107,3 +107,11 @@ Source algorithm inspiration: InsightFace SCRFD and ArcFace inference, original 
 - Whenever a sampled frame contains at least one above-threshold candidate, the live camera preview displays a pulsing **red border** and the exact Chinese title **"出现匹配目标"** with a smaller "请人工核验" disclaimer.
 - The red alert stops immediately when a newly analyzed frame contains no matching candidate, or after 1.6 seconds without a fresh result. No change to model, threshold, adaptive 5-frame sampling, candidate crop storage, or private model reuse.
 - Build as v0.8.2/versionCode 10 with the existing persistent signing certificate so it can install over v0.8.1.
+
+## v0.9.0: front-end refactor and live camera controls
+
+- Rebuilds the main screen into a compact workflow: reference face, live camera, local video search, settings, model state, and results.
+- Adds reference-photo preview and clear action, clearer model/offline status, and a result report card with copy and share actions.
+- Keeps the existing offline video search, Vulkan/CPU fallback, MediaCodec sequential decoder, adaptive live sampling, red match alert, candidate crop gallery, clip export, and persistent model reuse.
+- Adds live-camera front/back switching, torch control when the active camera exposes a flash unit, and screen-on behavior while monitoring.
+- Bumps versionCode to 11 while keeping the application ID and permanent signing certificate unchanged.
