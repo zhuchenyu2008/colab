@@ -71,7 +71,7 @@ class MediaTaskService : Service() {
         val action = intent?.action ?: return START_NOT_STICKY
         if (action == OP_CANCEL) {
             job?.cancel()
-            FFmpegKitConfig.cancel()
+            FFmpegKit.cancel()
             publish("取消请求已发送，正在结束当前片段", -1)
             return START_NOT_STICKY
         }
